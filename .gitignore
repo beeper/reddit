@@ -1,0 +1,10 @@
+/mautrix-reddit
+/start
+logs/
+*.db*
+*.yaml
+!example-config.yaml
+!.pre-commit-config.yaml
+!.github/workflows/*.yml
+!.gitlab-ci.yml
+.idea
