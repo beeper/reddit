@@ -1,0 +1,13 @@
+# Displayname template for Reddit ghost users.
+# .Username is the Reddit display username (without the leading u/).
+# .UserID is the Reddit t2_ ID.
+displayname_template: "{{ .Username }} (Reddit)"
+
+# Override the Reddit Matrix homeserver URL. Leave blank for the default.
+homeserver_url: ""
+
+sync:
+    # Number of seconds to long-poll Reddit's /sync endpoint per request.
+    poll_timeout_seconds: 30
+    # Minimum number of seconds to wait before retrying after a failed sync.
+    error_backoff_seconds: 5
