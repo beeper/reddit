@@ -32,7 +32,7 @@ Run the bridge (requires Go 1.26+ and libolm — `brew install libolm` on
 macOS, `apt-get install libolm-dev` on Debian/Ubuntu):
 
 ```sh
-go run ./cmd/mautrix-reddit -c config.yaml -r registration.yaml
+go run ./cmd/reddit -c config.yaml -r registration.yaml
 ```
 
 Then open Beeper Desktop, go to Settings -> Bridges -> Self-hosted Bridges,
@@ -55,7 +55,7 @@ publicly — they may contain account or connection details.
 ## Project Layout
 
 ```text
-cmd/mautrix-reddit/   Bridge binary entrypoint
-pkg/connector/        Beeper bridge connector
-pkg/redditchat/       Reddit chat client library
+cmd/reddit/        Bridge binary entrypoint
+pkg/connector/     Beeper bridge connector
+pkg/redditchat/    Reddit chat client library
 ```

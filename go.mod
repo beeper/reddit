@@ -1,22 +1,21 @@
-module github.com/beeper/mautrix-reddit
+module github.com/beeper/reddit
 
 go 1.26
 
 tool go.mau.fi/util/cmd/maubuild
 
 require (
+	github.com/chromedp/cdproto v0.0.0-20260321001828-e3e3800016bc
+	github.com/chromedp/chromedp v0.15.1
 	github.com/google/uuid v1.6.0
 	github.com/rs/zerolog v1.35.1
 	go.mau.fi/util v0.9.9
 	gopkg.in/yaml.v3 v3.0.1
 	maunium.net/go/mautrix v0.28.0
-	prohibition/redditchat v0.0.0
 )
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
-	github.com/chromedp/cdproto v0.0.0-20260321001828-e3e3800016bc // indirect
-	github.com/chromedp/chromedp v0.15.1 // indirect
 	github.com/chromedp/sysutil v1.1.0 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
 	github.com/coreos/go-systemd/v22 v22.7.0 // indirect
@@ -47,5 +46,3 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	maunium.net/go/mauflag v1.0.0 // indirect
 )
-
-replace prohibition/redditchat => ./pkg/redditchat

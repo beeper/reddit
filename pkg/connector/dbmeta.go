@@ -3,7 +3,7 @@ package connector
 import (
 	"maunium.net/go/mautrix/bridgev2/database"
 
-	"prohibition/redditchat"
+	"github.com/beeper/reddit/pkg/redditchat"
 )
 
 func (rc *RedditConnector) GetDBMetaTypes() database.MetaTypes {

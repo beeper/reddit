@@ -18,7 +18,7 @@ import (
 	"maunium.net/go/mautrix/bridgev2/status"
 	"maunium.net/go/mautrix/id"
 
-	"prohibition/redditchat"
+	"github.com/beeper/reddit/pkg/redditchat"
 )
 
 type RedditClient struct {

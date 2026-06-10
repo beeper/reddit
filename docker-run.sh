@@ -8,14 +8,14 @@ fi
 function fixperms {
 	chown -R $UID:$GID /data
 
-	# /opt/mautrix-reddit is read-only, so disable file logging if it's pointing there.
-	if [[ "$(yq e '.logging.writers[1].filename' /data/config.yaml)" == "./logs/mautrix-reddit.log" ]]; then
+	# /opt/reddit is read-only, so disable file logging if it's pointing there.
+	if [[ "$(yq e '.logging.writers[1].filename' /data/config.yaml)" == "./logs/reddit.log" ]]; then
 		yq -I4 e -i 'del(.logging.writers[1])' /data/config.yaml
 	fi
 }
 
 if [[ ! -f /data/config.yaml ]]; then
-	/usr/bin/mautrix-reddit -c /data/config.yaml -e
+	/usr/bin/reddit -c /data/config.yaml -e
 	echo "Didn't find a config file."
 	echo "Copied default config file to /data/config.yaml"
 	echo "Modify that config file to your liking."
@@ -24,7 +24,7 @@ if [[ ! -f /data/config.yaml ]]; then
 fi
 
 if [[ ! -f /data/registration.yaml ]]; then
-	/usr/bin/mautrix-reddit -g -c /data/config.yaml -r /data/registration.yaml || exit $?
+	/usr/bin/reddit -g -c /data/config.yaml -r /data/registration.yaml || exit $?
 	echo "Didn't find a registration file."
 	echo "Generated one for you."
 	echo "See https://docs.mau.fi/bridges/general/registering-appservices.html on how to use it."
@@ -33,4 +33,4 @@ fi
 
 cd /data
 fixperms
-exec su-exec $UID:$GID /usr/bin/mautrix-reddit
+exec su-exec $UID:$GID /usr/bin/reddit

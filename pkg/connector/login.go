@@ -12,10 +12,10 @@ import (
 
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
-	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/bridgev2/status"
+	"maunium.net/go/mautrix/id"
 
-	"prohibition/redditchat"
+	"github.com/beeper/reddit/pkg/redditchat"
 )
 
 const (
@@ -351,10 +351,7 @@ func (p *PasswordLogin) completeStep(ctx context.Context) (*bridgev2.LoginStep, 
 		ChatTokenExpiry: p.loginResult.Token.Expires,
 		Username:        p.username,
 	}
-	loginID := networkid.UserLoginID(strings.TrimPrefix(creds.UserID, "@"))
-	if idx := strings.Index(string(loginID), ":"); idx >= 0 {
-		loginID = loginID[:idx]
-	}
+	loginID := makeUserLoginID(id.UserID(creds.UserID))
 	remoteName := p.username
 	ul, err := p.user.NewLogin(ctx, &database.UserLogin{
 		ID:         loginID,

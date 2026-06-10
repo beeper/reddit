@@ -3,7 +3,7 @@ package main
 import (
 	"maunium.net/go/mautrix/bridgev2/matrix/mxmain"
 
-	"github.com/beeper/mautrix-reddit/pkg/connector"
+	"github.com/beeper/reddit/pkg/connector"
 )
 
 var (
@@ -13,8 +13,8 @@ var (
 )
 
 var m = mxmain.BridgeMain{
-	Name:        "mautrix-reddit",
-	URL:         "https://github.com/beeper/mautrix-reddit",
+	Name:        "reddit",
+	URL:         "https://github.com/beeper/reddit",
 	Description: "A Matrix-Reddit chat puppeting bridge.",
 	Version:     "0.1.0",
 	Connector:   &connector.RedditConnector{},

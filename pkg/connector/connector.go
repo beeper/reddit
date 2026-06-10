@@ -17,8 +17,8 @@ type RedditConnector struct {
 }
 
 var (
-	_ bridgev2.NetworkConnector              = (*RedditConnector)(nil)
-	_ bridgev2.ConfigValidatingNetwork       = (*RedditConnector)(nil)
+	_ bridgev2.NetworkConnector               = (*RedditConnector)(nil)
+	_ bridgev2.ConfigValidatingNetwork        = (*RedditConnector)(nil)
 	_ bridgev2.TransactionIDGeneratingNetwork = (*RedditConnector)(nil)
 )
 
