@@ -154,8 +154,12 @@ func CredentialsFromChromeDebugURL(ctx context.Context, debugURL string) (Creden
 }
 
 func CaptchaTokenProviderFromChromeDebugURL(debugURL string) CaptchaTokenProvider {
-	return func(ctx context.Context, req CaptchaRequest) (string, error) {
-		return CaptchaTokenFromChromeDebugURL(ctx, debugURL, req)
+	return func(ctx context.Context, req CaptchaRequest) (CaptchaResult, error) {
+		token, err := CaptchaTokenFromChromeDebugURL(ctx, debugURL, req)
+		if err != nil {
+			return CaptchaResult{}, err
+		}
+		return CaptchaResult{Token: token}, nil
 	}
 }
 

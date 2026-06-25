@@ -31,6 +31,7 @@ const (
 	FieldPassword       = "password"
 	FieldOTPCode        = "otp_code"
 	FieldRecaptchaToken = "recaptcha_token"
+	FieldClientVersion  = "client_version"
 )
 
 func (rc *RedditConnector) GetLoginFlows() []bridgev2.LoginFlow {
@@ -85,8 +86,9 @@ type PasswordLogin struct {
 }
 
 type captchaResponse struct {
-	token string
-	err   error
+	token         string
+	clientVersion string
+	err           error
 }
 
 var (
@@ -172,9 +174,10 @@ func (p *PasswordLogin) SubmitCookies(ctx context.Context, cookies map[string]st
 	if token == "" {
 		return nil, errors.New("missing reCAPTCHA token")
 	}
+	clientVersion := strings.TrimSpace(cookies[FieldClientVersion])
 	// Send the token to the waiting login goroutine.
 	select {
-	case p.captchaResp <- captchaResponse{token: token}:
+	case p.captchaResp <- captchaResponse{token: token, clientVersion: clientVersion}:
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -226,6 +229,20 @@ func (p *PasswordLogin) buildCaptchaStep(req redditchat.CaptchaRequest) *bridgev
 						{Type: bridgev2.LoginCookieTypeSpecial, Name: "recaptcha"},
 					},
 				},
+				{
+					// Sniff the real X-Reddit-Client-Version off the shreddit
+					// page's own /svc/ requests. Optional: when the client can't
+					// capture it, redditchat falls back to RedditClientVersion.
+					ID:       FieldClientVersion,
+					Required: false,
+					Sources: []bridgev2.LoginCookieFieldSource{
+						{
+							Type:            bridgev2.LoginCookieTypeRequestHeader,
+							Name:            "X-Reddit-Client-Version",
+							RequestURLRegex: `https://www\.reddit\.com/svc/`,
+						},
+					},
+				},
 			},
 			ExtractJS: js,
 		},
@@ -253,20 +270,20 @@ func (p *PasswordLogin) buildOTPStep() *bridgev2.LoginStep {
 // runLogin executes the redditchat login flow on a goroutine. The
 // CaptchaTokenProvider blocks until SubmitCookies pumps a token in.
 func (p *PasswordLogin) runLogin(ctx context.Context) {
-	provider := func(ctx context.Context, req redditchat.CaptchaRequest) (string, error) {
+	provider := func(ctx context.Context, req redditchat.CaptchaRequest) (redditchat.CaptchaResult, error) {
 		select {
 		case p.captchaReq <- req:
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return redditchat.CaptchaResult{}, ctx.Err()
 		}
 		select {
 		case resp := <-p.captchaResp:
 			if resp.err != nil {
-				return "", resp.err
+				return redditchat.CaptchaResult{}, resp.err
 			}
-			return resp.token, nil
+			return redditchat.CaptchaResult{Token: resp.token, ClientVersion: resp.clientVersion}, nil
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return redditchat.CaptchaResult{}, ctx.Err()
 		}
 	}
 
@@ -305,20 +322,20 @@ func (p *PasswordLogin) restartWithOTP(ctx context.Context, otp string) (*bridge
 	p.cancelFn = cancel
 
 	go func() {
-		provider := func(ctx context.Context, req redditchat.CaptchaRequest) (string, error) {
+		provider := func(ctx context.Context, req redditchat.CaptchaRequest) (redditchat.CaptchaResult, error) {
 			select {
 			case p.captchaReq <- req:
 			case <-ctx.Done():
-				return "", ctx.Err()
+				return redditchat.CaptchaResult{}, ctx.Err()
 			}
 			select {
 			case resp := <-p.captchaResp:
 				if resp.err != nil {
-					return "", resp.err
+					return redditchat.CaptchaResult{}, resp.err
 				}
-				return resp.token, nil
+				return redditchat.CaptchaResult{Token: resp.token, ClientVersion: resp.clientVersion}, nil
 			case <-ctx.Done():
-				return "", ctx.Err()
+				return redditchat.CaptchaResult{}, ctx.Err()
 			}
 		}
 		opts := redditchat.RedditLoginOptions{

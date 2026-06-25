@@ -54,7 +54,12 @@ type CaptchaRequest struct {
 	Step    CaptchaStep
 }
 
-type CaptchaTokenProvider func(ctx context.Context, req CaptchaRequest) (string, error)
+type CaptchaResult struct {
+	Token         string
+	ClientVersion string
+}
+
+type CaptchaTokenProvider func(ctx context.Context, req CaptchaRequest) (CaptchaResult, error)
 
 func (r CaptchaRequest) EnterpriseScriptURL() string {
 	return "https://www.google.com/recaptcha/enterprise.js?render=" + url.QueryEscape(firstNonEmpty(r.SiteKey, RedditLoginCaptchaSiteKey))
@@ -115,6 +120,16 @@ type RedditSession struct {
 	BaseURL   string
 	UserAgent string
 	CSRFToken string
+	// ClientVersion is the X-Reddit-Client-Version sniffed from the login
+	// webview (see captchaToken). Empty until the first captcha step completes.
+	ClientVersion string
+}
+
+func (s *RedditSession) clientVersion() string {
+	if s.ClientVersion != "" {
+		return s.ClientVersion
+	}
+	return DefaultRedditClientVersion
 }
 
 type RedditChatToken struct {
@@ -169,18 +184,18 @@ func NewFromRedditLogin(ctx context.Context, opts RedditLoginOptions) (*Client, 
 func StaticCaptchaTokenProvider(tokens ...string) CaptchaTokenProvider {
 	var mu sync.Mutex
 	var next int
-	return func(ctx context.Context, req CaptchaRequest) (string, error) {
+	return func(ctx context.Context, req CaptchaRequest) (CaptchaResult, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		if next >= len(tokens) {
-			return "", &CaptchaRequiredError{Request: req}
+			return CaptchaResult{}, &CaptchaRequiredError{Request: req}
 		}
 		token := strings.TrimSpace(tokens[next])
 		next++
 		if token == "" {
-			return "", errors.New("reddit login: empty captcha token")
+			return CaptchaResult{}, errors.New("reddit login: empty captcha token")
 		}
-		return token, nil
+		return CaptchaResult{Token: token}, nil
 	}
 }
 
@@ -289,7 +304,7 @@ func (s *RedditSession) RefreshChatToken(ctx context.Context) (RedditChatToken, 
 	req.Header.Set("Origin", s.BaseURL)
 	req.Header.Set("Referer", s.BaseURL+"/chat/")
 	req.Header.Set("X-Original-Referer", s.BaseURL+"/chat/")
-	req.Header.Set("X-Reddit-Client-Version", RedditClientVersion)
+	req.Header.Set("X-Reddit-Client-Version", s.clientVersion())
 	// Diagnostic: confirm the session looks authenticated before the token POST.
 	log := zerolog.Ctx(ctx)
 	if log != nil {
@@ -394,10 +409,13 @@ func (s *RedditSession) submitPassword(ctx context.Context, opts RedditLoginOpti
 	if err != nil {
 		return err
 	}
+	if captcha.ClientVersion != "" {
+		s.ClientVersion = captcha.ClientVersion
+	}
 	form := url.Values{
 		"username":               {opts.Username},
 		"password":               {opts.Password},
-		"recaptcha_token":        {captcha},
+		"recaptcha_token":        {captcha.Token},
 		"recaptcha_use_checkbox": {"false"},
 		"recaptcha_action":       {RedditLoginCaptchaAction},
 		"csrf_token":             {s.csrfToken()},
@@ -418,9 +436,12 @@ func (s *RedditSession) submitPassword(ctx context.Context, opts RedditLoginOpti
 		if err != nil {
 			return err
 		}
+		if captcha.ClientVersion != "" {
+			s.ClientVersion = captcha.ClientVersion
+		}
 		form := url.Values{
 			"appOtp":                 {otp},
-			"recaptcha_token":        {captcha},
+			"recaptcha_token":        {captcha.Token},
 			"recaptcha_use_checkbox": {"false"},
 			"recaptcha_action":       {RedditLoginCaptchaAction},
 			"username":               {opts.Username},
@@ -440,7 +461,7 @@ func (s *RedditSession) submitPassword(ctx context.Context, opts RedditLoginOpti
 	}
 }
 
-func (opts RedditLoginOptions) captchaToken(ctx context.Context, baseURL string, step CaptchaStep) (string, error) {
+func (opts RedditLoginOptions) captchaToken(ctx context.Context, baseURL string, step CaptchaStep) (CaptchaResult, error) {
 	req := CaptchaRequest{
 		SiteKey: RedditLoginCaptchaSiteKey,
 		Action:  RedditLoginCaptchaAction,
@@ -448,17 +469,17 @@ func (opts RedditLoginOptions) captchaToken(ctx context.Context, baseURL string,
 		Step:    step,
 	}
 	if opts.CaptchaTokenProvider == nil {
-		return "", &CaptchaRequiredError{Request: req}
+		return CaptchaResult{}, &CaptchaRequiredError{Request: req}
 	}
-	token, err := opts.CaptchaTokenProvider(ctx, req)
+	result, err := opts.CaptchaTokenProvider(ctx, req)
 	if err != nil {
-		return "", err
+		return CaptchaResult{}, err
 	}
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return "", errors.New("reddit login: empty captcha token")
+	result.Token = strings.TrimSpace(result.Token)
+	if result.Token == "" {
+		return CaptchaResult{}, errors.New("reddit login: empty captcha token")
 	}
-	return token, nil
+	return result, nil
 }
 
 func (s *RedditSession) postLoginForm(ctx context.Context, path string, form url.Values) (*http.Response, []byte, error) {
@@ -470,7 +491,7 @@ func (s *RedditSession) postLoginForm(ctx context.Context, path string, form url
 	req.Header.Set("Origin", s.BaseURL)
 	req.Header.Set("Referer", s.BaseURL+"/login/")
 	req.Header.Set("X-Original-Referer", s.BaseURL+"/login/")
-	req.Header.Set("X-Reddit-Client-Version", RedditClientVersion)
+	req.Header.Set("X-Reddit-Client-Version", s.clientVersion())
 	return s.do(req)
 }
 
