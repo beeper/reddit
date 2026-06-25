@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog"
 )
 
 const (
@@ -28,6 +30,9 @@ const (
 
 	RedditLoginCaptchaSiteKey = "6LfirrMoAAAAAHZOipvza4kpp_VtTwLNuXVwURNQ"
 	RedditLoginCaptchaAction  = "v1/web/login_with_password"
+
+	// DefaultRedditClientVersion is the X-Reddit-Client-Version header value
+	DefaultRedditClientVersion = "2026-06-24T12:00Z~unknown"
 )
 
 type CaptchaStep string
@@ -283,6 +288,22 @@ func (s *RedditSession) RefreshChatToken(ctx context.Context) (RedditChatToken, 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", s.BaseURL)
 	req.Header.Set("Referer", s.BaseURL+"/chat/")
+	req.Header.Set("X-Original-Referer", s.BaseURL+"/chat/")
+	req.Header.Set("X-Reddit-Client-Version", RedditClientVersion)
+	// Diagnostic: confirm the session looks authenticated before the token POST.
+	log := zerolog.Ctx(ctx)
+	if log != nil {
+		var cookieNames []string
+		if u, perr := url.Parse(s.BaseURL); perr == nil && s.Client != nil && s.Client.Jar != nil {
+			for _, c := range s.Client.Jar.Cookies(u) {
+				cookieNames = append(cookieNames, c.Name)
+			}
+		}
+		log.Debug().
+			Bool("has_csrf", csrf != "").
+			Strs("cookie_names", cookieNames).
+			Msg("Refreshing reddit chat token")
+	}
 	var token RedditChatToken
 	if err := s.doJSON(req, &token); err != nil {
 		return RedditChatToken{}, err
@@ -387,7 +408,7 @@ func (s *RedditSession) submitPassword(ctx context.Context, opts RedditLoginOpti
 	}
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return nil
+		return checkLoginResponseBody(ctx, body)
 	case http.StatusAccepted:
 		otp, err := opts.otpCode(time.Now())
 		if err != nil {
@@ -449,7 +470,7 @@ func (s *RedditSession) postLoginForm(ctx context.Context, path string, form url
 	req.Header.Set("Origin", s.BaseURL)
 	req.Header.Set("Referer", s.BaseURL+"/login/")
 	req.Header.Set("X-Original-Referer", s.BaseURL+"/login/")
-	req.Header.Set("X-Reddit-Client-Version", "2026-06-04T14:59Z~4fb66808")
+	req.Header.Set("X-Reddit-Client-Version", RedditClientVersion)
 	return s.do(req)
 }
 
@@ -655,6 +676,39 @@ func matrixWhoamiDevice(ctx context.Context, httpClient *http.Client, token stri
 	return whoami.DeviceID, nil
 }
 
+func checkLoginResponseBody(ctx context.Context, body []byte) error {
+	if log := zerolog.Ctx(ctx); log != nil {
+		preview := strings.TrimSpace(string(body))
+		if len(preview) > 300 {
+			preview = preview[:300]
+		}
+		log.Debug().
+			Int("body_len", len(body)).
+			Str("body_preview", preview).
+			Msg("Reddit password step returned 200")
+	}
+	var parsed struct {
+		Success *bool           `json:"success"`
+		Error   json.RawMessage `json:"error"`
+		Reason  json.RawMessage `json:"reason"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		// Non-JSON 200 (e.g. empty body) — nothing to fail on here.
+		return nil
+	}
+	failed := (parsed.Success != nil && !*parsed.Success) ||
+		(len(parsed.Error) > 0 && string(parsed.Error) != "null") ||
+		(len(parsed.Reason) > 0 && string(parsed.Reason) != "null")
+	if failed {
+		msg := strings.TrimSpace(string(body))
+		if len(msg) > 500 {
+			msg = msg[:500]
+		}
+		return fmt.Errorf("reddit login: password step rejected: %s", msg)
+	}
+	return nil
+}
+
 func redditStatusError(resp *http.Response, body []byte) error {
 	msg := strings.TrimSpace(string(body))
 	if len(msg) > 500 {
@@ -663,7 +717,16 @@ func redditStatusError(resp *http.Response, body []byte) error {
 	if msg == "" {
 		msg = resp.Status
 	}
-	return fmt.Errorf("reddit login: %s %s failed: %s", resp.Request.Method, resp.Request.URL.String(), msg)
+	contentType := resp.Header.Get("Content-Type")
+	location := resp.Header.Get("Location")
+	extra := ""
+	for _, h := range []string{"Cf-Ray", "Cf-Mitigated", "X-Ratelimit-Remaining"} {
+		if v := resp.Header.Get(h); v != "" {
+			extra += fmt.Sprintf(" %s=%q", strings.ToLower(h), v)
+		}
+	}
+	return fmt.Errorf("reddit login: %s %s failed: status=%d content-type=%q location=%q%s body=%s",
+		resp.Request.Method, resp.Request.URL.String(), resp.StatusCode, contentType, location, extra, msg)
 }
 
 func findFirst(text string, patterns ...string) string {
