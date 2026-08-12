@@ -46,7 +46,7 @@ func (rc *RedditConnector) GetLoginFlows() []bridgev2.LoginFlow {
 
 func (rc *RedditConnector) CreateLogin(ctx context.Context, user *bridgev2.User, flowID string) (bridgev2.LoginProcess, error) {
 	if flowID != FlowIDPassword {
-		return nil, fmt.Errorf("unknown login flow ID: %s", flowID)
+		return nil, bridgev2.ErrInvalidLoginFlowID
 	}
 	return &PasswordLogin{main: rc, user: user}, nil
 }
@@ -142,7 +142,11 @@ func (p *PasswordLogin) SubmitUserInput(ctx context.Context, input map[string]st
 		username := strings.TrimSpace(input[FieldUsername])
 		password := input[FieldPassword]
 		if username == "" || password == "" {
-			return nil, errors.New("username and password are required")
+			return nil, bridgev2.RespError{
+				ErrCode:    "COM.BEEPER.REDDIT.MISSING_CREDENTIALS",
+				Err:        "Username and password are required.",
+				StatusCode: http.StatusBadRequest,
+			}
 		}
 		p.username = username
 		p.password = password
@@ -160,7 +164,11 @@ func (p *PasswordLogin) SubmitUserInput(ctx context.Context, input map[string]st
 	// Second call: OTP code from the user.
 	otp := strings.TrimSpace(input[FieldOTPCode])
 	if otp == "" {
-		return nil, errors.New("OTP code is required")
+		return nil, bridgev2.RespError{
+			ErrCode:    "COM.BEEPER.REDDIT.MISSING_OTP",
+			Err:        "A two-factor code is required.",
+			StatusCode: http.StatusBadRequest,
+		}
 	}
 	// The redditchat library reads the OTP from RedditLoginOptions.TOTPCode,
 	// not via a callback. So we restart the login flow with the OTP populated;
@@ -172,7 +180,7 @@ func (p *PasswordLogin) SubmitUserInput(ctx context.Context, input map[string]st
 func (p *PasswordLogin) SubmitCookies(ctx context.Context, cookies map[string]string) (*bridgev2.LoginStep, error) {
 	token := strings.TrimSpace(cookies[FieldRecaptchaToken])
 	if token == "" {
-		return nil, errors.New("missing reCAPTCHA token")
+		return nil, ErrLoginCaptchaFailed
 	}
 	clientVersion := strings.TrimSpace(cookies[FieldClientVersion])
 	// Send the token to the waiting login goroutine.
@@ -197,7 +205,7 @@ func (p *PasswordLogin) awaitNextStep(ctx context.Context) (*bridgev2.LoginStep,
 			if errors.Is(p.loginErr, errLoginNeedsOTP) {
 				return p.buildOTPStep(), nil
 			}
-			return nil, p.loginErr
+			return nil, wrapRedditLoginError(p.loginErr)
 		}
 		return p.completeStep(ctx)
 	case <-ctx.Done():
@@ -299,7 +307,7 @@ func (p *PasswordLogin) runLogin(ctx context.Context) {
 	// captcha token and tries to read the OTP. With TOTPCode unset, it fails
 	// with "otp required". We surface that as errLoginNeedsOTP so the caller
 	// restarts with the OTP filled in.
-	if err != nil && strings.Contains(err.Error(), "otp required") {
+	if errors.Is(err, redditchat.ErrOTPRequired) {
 		err = errLoginNeedsOTP
 	}
 
