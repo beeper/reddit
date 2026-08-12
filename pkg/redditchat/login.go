@@ -45,6 +45,10 @@ const (
 var (
 	ErrCaptchaRequired            = errors.New("reddit login: captcha token provider required")
 	ErrBrowserVerificationBlocked = errors.New("reddit login: browser verification blocked")
+	ErrOTPRequired                = errors.New("reddit login: otp required; provide TOTPCode or TOTPSecret")
+	ErrInvalidOTP                 = errors.New("reddit login: otp code rejected")
+	ErrInvalidCredentials         = errors.New("reddit login: username or password rejected")
+	ErrSSORequired                = errors.New("reddit login: account requires SSO login")
 )
 
 type CaptchaRequest struct {
@@ -399,7 +403,7 @@ func (s *RedditSession) checkOIDCRequired(ctx context.Context, username, loginPa
 		return err
 	}
 	if resp.IsSSO {
-		return errors.New("reddit login: account requires SSO login")
+		return ErrSSORequired
 	}
 	return nil
 }
@@ -453,9 +457,11 @@ func (s *RedditSession) submitPassword(ctx context.Context, opts RedditLoginOpti
 			return err
 		}
 		if resp.StatusCode != http.StatusOK {
-			return redditStatusError(resp, body)
+			return fmt.Errorf("%w: %w", ErrInvalidOTP, redditStatusError(resp, body))
 		}
 		return nil
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
+		return fmt.Errorf("%w: %w", ErrInvalidCredentials, redditStatusError(resp, body))
 	default:
 		return redditStatusError(resp, body)
 	}
@@ -575,7 +581,7 @@ func (opts RedditLoginOptions) otpCode(now time.Time) (string, error) {
 		return opts.TOTPCode, nil
 	}
 	if opts.TOTPSecret == "" {
-		return "", errors.New("reddit login: otp required; provide TOTPCode or TOTPSecret")
+		return "", ErrOTPRequired
 	}
 	return GenerateTOTP(opts.TOTPSecret, now)
 }
@@ -725,7 +731,7 @@ func checkLoginResponseBody(ctx context.Context, body []byte) error {
 		if len(msg) > 500 {
 			msg = msg[:500]
 		}
-		return fmt.Errorf("reddit login: password step rejected: %s", msg)
+		return fmt.Errorf("%w: %s", ErrInvalidCredentials, msg)
 	}
 	return nil
 }
