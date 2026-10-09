@@ -81,8 +81,8 @@ func (*RedditClient) GetCapabilities(ctx context.Context, portal *bridgev2.Porta
 		Delete:               event.CapLevelFullySupported,
 		DeleteChat:           true,
 		DeleteMaxAge:         ptr.Ptr(jsontime.S(60 * time.Minute)),
-		CustomEmojiReactions: true,
 		Reaction:             event.CapLevelFullySupported,
+		CustomEmojiReactions: true,
 		MessageRequest: &event.MessageRequestFeatures{
 			AcceptWithButton: event.CapLevelFullySupported,
 			// The SDK accepts first, then sends the user's message.
@@ -91,10 +91,16 @@ func (*RedditClient) GetCapabilities(ctx context.Context, portal *bridgev2.Porta
 		ReadReceipts:        true,
 		TypingNotifications: true,
 		State:               stateCaps,
+		MemberActions: map[event.MemberAction]event.CapabilitySupportLevel{
+			event.MemberActionInvite: event.CapLevelFullySupported,
+			event.MemberActionKick:   event.CapLevelFullySupported,
+		},
 	}).Clone()
 	if portal != nil && portal.RoomType == database.RoomTypeDM {
 		caps.ID += ".dm"
 		caps.State[event.StateRoomName.Type].Level = event.CapLevelRejected
+		caps.MemberActions[event.MemberActionInvite] = event.CapLevelRejected
+		caps.MemberActions[event.MemberActionKick] = event.CapLevelRejected
 	}
 	return caps
 }

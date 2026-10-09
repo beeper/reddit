@@ -47,7 +47,10 @@ func (r *RedditClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (
 			ID:  networkid.AvatarID(mxc),
 			Get: func(ctx context.Context) ([]byte, error) { return r.downloadRedditMedia(ctx, mxc, nil) },
 		}
-
+		if r.main.directMedia {
+			// Retain the normal download fallback if the identity cannot fit.
+			info.Avatar.MXC, _ = r.directMediaURI(ctx, mxc)
+		}
 	}
 	return info, nil
 }

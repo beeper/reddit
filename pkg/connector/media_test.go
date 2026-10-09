@@ -145,6 +145,7 @@ func TestIncomingMediaReuploadsBodyAndThumbnailForEncryptedRoom(t *testing.T) {
 		}
 	})
 	intent := &mediaTestIntent{}
+	r.main.SetUseDirectMedia() // Native encryption must still use verified reupload.
 	source := &event.MessageEventContent{MsgType: event.MsgImage, Body: "caption", FileName: "test.png", File: &event.EncryptedFileInfo{URL: "mxc://reddit.com/image", EncryptedFile: serializeMediaKey(t, key)}, Info: &event.FileInfo{ThumbnailURL: "mxc://reddit.com/thumb", MimeType: "image/wrong"}}
 	converted, err := r.convertMessage(context.Background(), historyPortal(), intent, &event.Event{Content: event.Content{Parsed: source}})
 	if err != nil {

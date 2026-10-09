@@ -18,6 +18,7 @@ type RedditConnector struct {
 	Config           Config
 	mediaUploadLimit atomic.Int64
 	emojiMu          sync.Mutex
+	directMedia      bool
 }
 
 var (

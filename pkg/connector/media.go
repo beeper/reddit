@@ -101,6 +101,22 @@ func (r *RedditClient) downloadRedditMedia(ctx context.Context, uri id.ContentUR
 }
 
 func (r *RedditClient) receiveMedia(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, content *event.MessageEventContent) error {
+	// Encrypted native files keep the verified reupload path: their keys must
+	// never be embedded in public media IDs. Fall back there for oversized IDs
+	// too, since the framework limits the length of signed content URIs.
+	if r.main.directMedia && content.File == nil && (content.Info == nil || content.Info.ThumbnailFile == nil) {
+		url, err := r.directMediaURI(ctx, content.URL)
+		var thumbnail id.ContentURIString
+		if err == nil && content.Info != nil && content.Info.ThumbnailURL != "" {
+			thumbnail, err = r.directMediaURI(ctx, content.Info.ThumbnailURL)
+		}
+		if err == nil {
+			content.URL = url
+			copyMediaInfo(content)
+			content.Info.ThumbnailURL = thumbnail
+			return nil
+		}
+	}
 	if intent == nil {
 		return errors.New("media conversion requires a Matrix sender")
 	}
