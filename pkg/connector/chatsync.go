@@ -14,6 +14,8 @@ import (
 	"maunium.net/go/mautrix/bridgev2/status"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
+
+	"github.com/beeper/reddit/pkg/redditchat"
 )
 
 // runSync is the long-poll loop that translates Reddit-Matrix sync responses
@@ -76,7 +78,7 @@ func (r *RedditClient) runSync(ctx context.Context) {
 	}
 }
 
-func (r *RedditClient) handleSync(ctx context.Context, resp *mautrix.RespSync) {
+func (r *RedditClient) handleSync(ctx context.Context, resp *redditchat.SyncResponse) {
 	for roomID, joined := range resp.Rooms.Join {
 		r.handleJoinedRoom(ctx, roomID, joined)
 	}

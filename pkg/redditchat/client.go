@@ -145,8 +145,29 @@ func (c *Client) Capabilities(ctx context.Context) (*mautrix.RespCapabilities, e
 	return c.Matrix.Capabilities(ctx)
 }
 
-func (c *Client) Sync(ctx context.Context, since string, timeoutMS int) (*mautrix.RespSync, error) {
-	return c.Matrix.SyncRequest(ctx, timeoutMS, since, redditSyncFilter(), false, event.PresenceOffline)
+// SyncResponse includes Reddit's preview rooms, where pending DM account data
+// (including Ignore) arrives. These are not joined rooms.
+type SyncResponse struct {
+	NextBatch string `json:"next_batch"`
+	Rooms     struct {
+		mautrix.RespSyncRooms
+		Peek map[id.RoomID]*mautrix.SyncJoinedRoom `json:"peek"`
+	} `json:"rooms"`
+}
+
+func (c *Client) Sync(ctx context.Context, since string, timeoutMS int) (*SyncResponse, error) {
+	// Reddit omits m.reaction events whenever an inline filter is supplied,
+	// including an empty {} filter. Same-cursor native captures confirmed that
+	// leaving the parameter absent returns the complete reaction stream.
+	req := mautrix.ReqSync{Timeout: timeoutMS, Since: since, SetPresence: event.PresenceOffline}
+	var resp SyncResponse
+	_, err := c.Matrix.MakeFullRequest(ctx, mautrix.FullRequest{
+		Method:       http.MethodGet,
+		URL:          c.Matrix.BuildURLWithQuery(mautrix.ClientURLPath{"v3", "sync"}, req.BuildQuery()),
+		ResponseJSON: &resp,
+		MaxAttempts:  1, // The connector's sync loop owns native retries.
+	})
+	return &resp, err
 }
 
 func (c *Client) JoinedRooms(ctx context.Context) (*mautrix.RespJoinedRooms, error) {
@@ -160,6 +181,13 @@ func (c *Client) Messages(ctx context.Context, roomID id.RoomID, from, to string
 
 func (c *Client) GetEvent(ctx context.Context, roomID id.RoomID, eventID id.EventID) (*event.Event, error) {
 	return c.Matrix.GetEvent(ctx, roomID, eventID)
+}
+
+func (c *Client) Reactions(ctx context.Context, roomID id.RoomID, eventID id.EventID, from string) (*mautrix.RespGetRelations, error) {
+	return c.Matrix.GetRelations(ctx, roomID, eventID, &mautrix.ReqGetRelations{
+		RelationType: event.RelAnnotation, EventType: event.EventReaction,
+		Dir: mautrix.DirectionBackward, From: from, Limit: 100,
+	})
 }
 
 func (c *Client) SearchUsers(ctx context.Context, term string) (*UserDirectorySearchResponse, error) {
@@ -297,8 +325,8 @@ func (c *Client) SendNotice(ctx context.Context, roomID id.RoomID, body string) 
 	return c.Matrix.SendNotice(ctx, roomID, body)
 }
 
-func (c *Client) SendMessage(ctx context.Context, roomID id.RoomID, content *event.MessageEventContent) (*mautrix.RespSendEvent, error) {
-	return c.Matrix.SendMessageEvent(ctx, roomID, event.EventMessage, content)
+func (c *Client) SendMessage(ctx context.Context, roomID id.RoomID, content *event.MessageEventContent, extra ...mautrix.ReqSendEvent) (*mautrix.RespSendEvent, error) {
+	return c.Matrix.SendMessageEvent(ctx, roomID, event.EventMessage, content, extra...)
 }
 
 func (c *Client) UploadMedia(ctx context.Context, filename, contentType string, r io.Reader) (*mautrix.RespMediaUpload, int, error) {
@@ -325,11 +353,28 @@ func (c *Client) MediaConfig(ctx context.Context) (*MediaConfigResponse, error) 
 }
 
 func (c *Client) DownloadMedia(ctx context.Context, uri id.ContentURI) (*http.Response, error) {
-	return c.Matrix.Download(ctx, uri)
+	if uri.IsEmpty() || uri.Homeserver != "reddit.com" {
+		return nil, errors.New("reddit chat: invalid media identity")
+	}
+	// Reddit Chat's retained images use media/v3/download. The generic SDK's
+	// authenticated client/v1/media/download route returns 404 on Reddit.
+	_, resp, err := c.Matrix.MakeFullRequestWithResp(ctx, mautrix.FullRequest{
+		Method:           http.MethodGet,
+		URL:              c.Matrix.BuildURL(mautrix.MediaURLPath{"v3", "download", uri.Homeserver, uri.FileID}),
+		DontReadResponse: true,
+	})
+	return resp, err
 }
 
 func (c *Client) DownloadMediaBytes(ctx context.Context, uri id.ContentURI) ([]byte, error) {
-	return c.Matrix.DownloadBytes(ctx, uri)
+	resp, err := c.DownloadMedia(ctx, uri)
+	if resp != nil && resp.Body != nil {
+		defer resp.Body.Close()
+	}
+	if err != nil {
+		return nil, err
+	}
+	return io.ReadAll(resp.Body)
 }
 
 func (c *Client) SendFile(ctx context.Context, roomID id.RoomID, filename, contentType string, r io.Reader) (*mautrix.RespSendEvent, error) {
@@ -479,8 +524,4 @@ func existingRoomIDFromError(err error) id.RoomID {
 		return id.RoomID(v)
 	}
 	return ""
-}
-
-func redditSyncFilter() string {
-	return `{"room":{"timeline":{"unread_thread_notifications":true,"not_types":["com.reddit.review_open","com.reddit.review_close"],"lazy_load_members":true},"state":{"lazy_load_members":true}}}`
 }
