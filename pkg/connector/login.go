@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
@@ -38,7 +37,7 @@ func (rc *RedditConnector) GetLoginFlows() []bridgev2.LoginFlow {
 	return []bridgev2.LoginFlow{
 		{
 			Name:        "Username & password",
-			Description: "Log in with your Reddit account. CAPTCHA solving uses an embedded webview.",
+			Description: "Log in with your Reddit account. Verification runs in the background.",
 			ID:          FlowIDPassword,
 		},
 	}
@@ -46,49 +45,21 @@ func (rc *RedditConnector) GetLoginFlows() []bridgev2.LoginFlow {
 
 func (rc *RedditConnector) CreateLogin(ctx context.Context, user *bridgev2.User, flowID string) (bridgev2.LoginProcess, error) {
 	if flowID != FlowIDPassword {
-		return nil, fmt.Errorf("unknown login flow ID: %s", flowID)
+		return nil, bridgev2.ErrInvalidLoginFlowID
 	}
-	return &PasswordLogin{main: rc, user: user}, nil
+	loginCtx, cancel := context.WithCancel(context.Background())
+	return &PasswordLogin{user: user, ctx: loginCtx, cancel: cancel, step: StepIDEnterCredentials}, nil
 }
 
-// PasswordLogin drives the multi-step Reddit login flow. Reddit needs:
-//
-//  1. username + password (entered in the bridge UI)
-//  2. a reCAPTCHA Enterprise token for the password POST (solved in a webview)
-//  3. optionally an OTP code (entered in the bridge UI)
-//  4. optionally a second reCAPTCHA token for the OTP POST (solved in a webview)
-//
-// The redditchat library's LoginReddit takes a CaptchaTokenProvider callback
-// that blocks until a token is returned. We run LoginReddit on a goroutine and
-// pump CaptchaRequest values out / token strings in via channels, advancing the
-// bridgev2 LoginStep state machine between each request.
+// PasswordLogin maps Reddit's password, verification and OTP operations directly
+// onto bridgev2 login steps. No native worker runs between steps.
 type PasswordLogin struct {
-	main *RedditConnector
-	user *bridgev2.User
-
-	username string
-	password string
-
-	// loginDone signals the LoginReddit goroutine has finished. Its result is
-	// stored in loginResult / loginErr.
-	loginDone   chan struct{}
-	loginResult *redditchat.RedditLoginResult
-	loginErr    error
-
-	// captchaReq carries CaptchaRequest values from the library goroutine to
-	// the SubmitUserInput / SubmitCookies handler. captchaResp returns the
-	// solved token back to the library goroutine.
-	captchaReq  chan redditchat.CaptchaRequest
-	captchaResp chan captchaResponse
-
-	cancelOnce sync.Once
-	cancelFn   func()
-}
-
-type captchaResponse struct {
-	token         string
-	clientVersion string
-	err           error
+	user                    *bridgev2.User
+	ctx                     context.Context
+	cancel                  context.CancelFunc
+	step                    string
+	session                 *redditchat.RedditSession
+	username, password, otp string
 }
 
 var (
@@ -97,22 +68,23 @@ var (
 	_ bridgev2.LoginProcessCookies   = (*PasswordLogin)(nil)
 )
 
-func (p *PasswordLogin) Cancel() {
-	p.cancelOnce.Do(func() {
-		if p.cancelFn != nil {
-			p.cancelFn()
-		}
-		// Unblock anyone waiting on a response so the goroutine can exit.
-		if p.captchaResp != nil {
-			select {
-			case p.captchaResp <- captchaResponse{err: errors.New("login cancelled")}:
-			default:
-			}
-		}
-	})
+func (p *PasswordLogin) Cancel() { p.cancel() }
+
+// Keep process cancellation effective even if it races with a provisioning
+// worker starting a step. The supplied context also cancels that step's IO.
+func (p *PasswordLogin) stepContext(ctx context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(p.ctx, cancel)
+	if p.ctx.Err() != nil {
+		cancel()
+	}
+	return ctx, func() { stop(); cancel() }
 }
 
 func (p *PasswordLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
+	if err := p.ctx.Err(); err != nil {
+		return nil, err
+	}
 	return &bridgev2.LoginStep{
 		Type:         bridgev2.LoginStepTypeUserInput,
 		StepID:       StepIDEnterCredentials,
@@ -134,75 +106,68 @@ func (p *PasswordLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) 
 	}, nil
 }
 
-// SubmitUserInput handles both the initial credentials step and the OTP step.
-// The state machine distinguishes them by inspecting which channels are live.
 func (p *PasswordLogin) SubmitUserInput(ctx context.Context, input map[string]string) (*bridgev2.LoginStep, error) {
-	// First call: collect credentials and kick off the login goroutine.
-	if p.loginDone == nil {
-		username := strings.TrimSpace(input[FieldUsername])
-		password := input[FieldPassword]
-		if username == "" || password == "" {
-			return nil, errors.New("username and password are required")
+	ctx, done := p.stepContext(ctx)
+	defer done()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	switch p.step {
+	case StepIDEnterCredentials:
+		p.username, p.password = strings.TrimSpace(input[FieldUsername]), input[FieldPassword]
+		if p.username == "" || p.password == "" {
+			return nil, ErrLoginMissingCredentials
 		}
-		p.username = username
-		p.password = password
-		p.captchaReq = make(chan redditchat.CaptchaRequest, 1)
-		p.captchaResp = make(chan captchaResponse, 1)
-		p.loginDone = make(chan struct{})
-
-		loginCtx, cancel := context.WithCancel(context.Background())
-		p.cancelFn = cancel
-		go p.runLogin(loginCtx)
-
-		return p.awaitNextStep(ctx)
+		var err error
+		p.session, err = redditchat.NewRedditSession(nil, "", "")
+		if err == nil {
+			err = p.session.PrepareLogin(ctx, p.username)
+		}
+		if err != nil {
+			return nil, wrapRedditLoginError(err)
+		}
+		return p.buildCaptchaStep(p.session.CaptchaRequest(redditchat.CaptchaStepPassword)), nil
+	case StepIDEnterOTP:
+		p.otp = strings.TrimSpace(input[FieldOTPCode])
+		if len(p.otp) != 6 || strings.Trim(p.otp, "0123456789") != "" {
+			return nil, ErrLoginMissingOTP
+		}
+		return p.buildCaptchaStep(p.session.CaptchaRequest(redditchat.CaptchaStepOTP)), nil
+	default:
+		return nil, errors.New("reddit login is not waiting for user input")
 	}
-
-	// Second call: OTP code from the user.
-	otp := strings.TrimSpace(input[FieldOTPCode])
-	if otp == "" {
-		return nil, errors.New("OTP code is required")
-	}
-	// The redditchat library reads the OTP from RedditLoginOptions.TOTPCode,
-	// not via a callback. So we restart the login flow with the OTP populated;
-	// this re-runs the password POST (with a fresh CAPTCHA) and then the OTP
-	// POST (with a second CAPTCHA). That's the shape Reddit expects anyway.
-	return p.restartWithOTP(ctx, otp)
 }
 
 func (p *PasswordLogin) SubmitCookies(ctx context.Context, cookies map[string]string) (*bridgev2.LoginStep, error) {
-	token := strings.TrimSpace(cookies[FieldRecaptchaToken])
-	if token == "" {
-		return nil, errors.New("missing reCAPTCHA token")
+	ctx, done := p.stepContext(ctx)
+	defer done()
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	clientVersion := strings.TrimSpace(cookies[FieldClientVersion])
-	// Send the token to the waiting login goroutine.
-	select {
-	case p.captchaResp <- captchaResponse{token: token, clientVersion: clientVersion}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	if p.step != StepIDCaptchaPassword && p.step != StepIDCaptchaOTP {
+		return nil, errors.New("reddit login is not waiting for verification")
 	}
-	return p.awaitNextStep(ctx)
-}
-
-// awaitNextStep blocks until the login goroutine either:
-//   - asks for another CAPTCHA token (return a Cookies step), or
-//   - asks for an OTP code (return a UserInput step), or
-//   - finishes (return a Complete step or error).
-func (p *PasswordLogin) awaitNextStep(ctx context.Context) (*bridgev2.LoginStep, error) {
-	select {
-	case req := <-p.captchaReq:
-		return p.buildCaptchaStep(req), nil
-	case <-p.loginDone:
-		if p.loginErr != nil {
-			if errors.Is(p.loginErr, errLoginNeedsOTP) {
-				return p.buildOTPStep(), nil
-			}
-			return nil, p.loginErr
+	captcha := redditchat.CaptchaResult{
+		Token:         strings.TrimSpace(cookies[FieldRecaptchaToken]),
+		ClientVersion: strings.TrimSpace(cookies[FieldClientVersion]),
+	}
+	if captcha.Token == "" {
+		return nil, ErrLoginVerificationFailed
+	}
+	var err error
+	if p.step == StepIDCaptchaPassword {
+		var needsOTP bool
+		needsOTP, err = p.session.SubmitPassword(ctx, p.username, p.password, captcha)
+		if err == nil && needsOTP {
+			return p.buildOTPStep(), nil
 		}
-		return p.completeStep(ctx)
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	} else {
+		err = p.session.SubmitOTP(ctx, p.username, p.password, p.otp, captcha)
 	}
+	if err != nil {
+		return nil, wrapRedditLoginError(err)
+	}
+	return p.completeStep(ctx)
 }
 
 func (p *PasswordLogin) buildCaptchaStep(req redditchat.CaptchaRequest) *bridgev2.LoginStep {
@@ -210,6 +175,7 @@ func (p *PasswordLogin) buildCaptchaStep(req redditchat.CaptchaRequest) *bridgev
 	if req.Step == redditchat.CaptchaStepOTP {
 		stepID = StepIDCaptchaOTP
 	}
+	p.step = stepID
 	// Wrap the redditchat-provided JS so the Promise it returns resolves to
 	// {recaptcha_token: "..."} — the shape expected by LoginCookiesParams.
 	js := fmt.Sprintf(`(async () => { const token = await %s; return { %q: token }; })()`,
@@ -217,10 +183,11 @@ func (p *PasswordLogin) buildCaptchaStep(req redditchat.CaptchaRequest) *bridgev
 	return &bridgev2.LoginStep{
 		Type:         bridgev2.LoginStepTypeCookies,
 		StepID:       stepID,
-		Instructions: "Solve the Reddit CAPTCHA in the webview.",
+		Instructions: "Verifying with Reddit…",
 		CookiesParams: &bridgev2.LoginCookiesParams{
 			URL:       req.PageURL,
 			UserAgent: redditchat.DefaultRedditUserAgent,
+			Hidden:    true,
 			Fields: []bridgev2.LoginCookieField{
 				{
 					ID:       FieldRecaptchaToken,
@@ -232,7 +199,7 @@ func (p *PasswordLogin) buildCaptchaStep(req redditchat.CaptchaRequest) *bridgev
 				{
 					// Sniff the real X-Reddit-Client-Version off the shreddit
 					// page's own /svc/ requests. Optional: when the client can't
-					// capture it, redditchat falls back to RedditClientVersion.
+					// capture it, redditchat uses its default client version.
 					ID:       FieldClientVersion,
 					Required: false,
 					Sources: []bridgev2.LoginCookieFieldSource{
@@ -250,6 +217,7 @@ func (p *PasswordLogin) buildCaptchaStep(req redditchat.CaptchaRequest) *bridgev
 }
 
 func (p *PasswordLogin) buildOTPStep() *bridgev2.LoginStep {
+	p.step = StepIDEnterOTP
 	return &bridgev2.LoginStep{
 		Type:         bridgev2.LoginStepTypeUserInput,
 		StepID:       StepIDEnterOTP,
@@ -267,105 +235,26 @@ func (p *PasswordLogin) buildOTPStep() *bridgev2.LoginStep {
 	}
 }
 
-// runLogin executes the redditchat login flow on a goroutine. The
-// CaptchaTokenProvider blocks until SubmitCookies pumps a token in.
-func (p *PasswordLogin) runLogin(ctx context.Context) {
-	provider := func(ctx context.Context, req redditchat.CaptchaRequest) (redditchat.CaptchaResult, error) {
-		select {
-		case p.captchaReq <- req:
-		case <-ctx.Done():
-			return redditchat.CaptchaResult{}, ctx.Err()
-		}
-		select {
-		case resp := <-p.captchaResp:
-			if resp.err != nil {
-				return redditchat.CaptchaResult{}, resp.err
-			}
-			return redditchat.CaptchaResult{Token: resp.token, ClientVersion: resp.clientVersion}, nil
-		case <-ctx.Done():
-			return redditchat.CaptchaResult{}, ctx.Err()
-		}
-	}
-
-	opts := redditchat.RedditLoginOptions{
-		Username:             p.username,
-		Password:             p.password,
-		CaptchaTokenProvider: provider,
-	}
-	result, err := redditchat.LoginReddit(ctx, opts)
-
-	// Detect 2FA-required responses. Reddit returns 202 from the password POST
-	// when 2FA is needed; redditchat.submitPassword then asks for a second
-	// captcha token and tries to read the OTP. With TOTPCode unset, it fails
-	// with "otp required". We surface that as errLoginNeedsOTP so the caller
-	// restarts with the OTP filled in.
-	if err != nil && strings.Contains(err.Error(), "otp required") {
-		err = errLoginNeedsOTP
-	}
-
-	p.loginResult = result
-	p.loginErr = err
-	close(p.loginDone)
-}
-
-// restartWithOTP restarts the login flow with the OTP code populated. The
-// previous goroutine has already exited (with errLoginNeedsOTP) so we can spin
-// up a fresh one with the same username/password plus TOTPCode. This
-// re-triggers the password CAPTCHA and then the OTP CAPTCHA, but that's the
-// shape Reddit's flow expects anyway.
-func (p *PasswordLogin) restartWithOTP(ctx context.Context, otp string) (*bridgev2.LoginStep, error) {
-	p.captchaReq = make(chan redditchat.CaptchaRequest, 1)
-	p.captchaResp = make(chan captchaResponse, 1)
-	p.loginDone = make(chan struct{})
-
-	loginCtx, cancel := context.WithCancel(context.Background())
-	p.cancelFn = cancel
-
-	go func() {
-		provider := func(ctx context.Context, req redditchat.CaptchaRequest) (redditchat.CaptchaResult, error) {
-			select {
-			case p.captchaReq <- req:
-			case <-ctx.Done():
-				return redditchat.CaptchaResult{}, ctx.Err()
-			}
-			select {
-			case resp := <-p.captchaResp:
-				if resp.err != nil {
-					return redditchat.CaptchaResult{}, resp.err
-				}
-				return redditchat.CaptchaResult{Token: resp.token, ClientVersion: resp.clientVersion}, nil
-			case <-ctx.Done():
-				return redditchat.CaptchaResult{}, ctx.Err()
-			}
-		}
-		opts := redditchat.RedditLoginOptions{
-			Username:             p.username,
-			Password:             p.password,
-			TOTPCode:             otp,
-			CaptchaTokenProvider: provider,
-		}
-		result, err := redditchat.LoginReddit(loginCtx, opts)
-		p.loginResult = result
-		p.loginErr = err
-		close(p.loginDone)
-	}()
-
-	return p.awaitNextStep(ctx)
-}
-
 func (p *PasswordLogin) completeStep(ctx context.Context) (*bridgev2.LoginStep, error) {
-	if p.loginResult == nil {
-		return nil, errors.New("login finished without a result")
+	if err := p.ctx.Err(); err != nil {
+		return nil, err
 	}
-	creds := p.loginResult.Credentials
-	cookiesJSON, err := serializeCookies(p.loginResult.Session)
+	defer func() { p.password, p.otp = "", "" }()
+	token, creds, err := redditchat.CredentialsFromRedditSession(ctx, p.session)
+	if err != nil {
+		return nil, wrapRedditLoginError(err)
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	cookiesJSON, err := serializeCookies(p.session)
 	if err != nil {
 		return nil, fmt.Errorf("serialize cookies: %w", err)
 	}
 	meta := &UserLoginMetadata{
 		Credentials:     creds,
 		CookiesJSON:     cookiesJSON,
-		ChatTokenExpiry: p.loginResult.Token.Expires,
+		ChatTokenExpiry: token.Expires,
 		Username:        p.username,
 	}
 	loginID := makeUserLoginID(id.UserID(creds.UserID))
@@ -381,6 +270,7 @@ func (p *PasswordLogin) completeStep(ctx context.Context) (*bridgev2.LoginStep, 
 	if err != nil {
 		return nil, fmt.Errorf("save user login: %w", err)
 	}
+	p.step = StepIDComplete
 	go ul.Client.Connect(ul.Log.WithContext(context.Background()))
 	return &bridgev2.LoginStep{
 		Type:           bridgev2.LoginStepTypeComplete,
@@ -389,11 +279,6 @@ func (p *PasswordLogin) completeStep(ctx context.Context) (*bridgev2.LoginStep, 
 		CompleteParams: &bridgev2.LoginCompleteParams{UserLoginID: ul.ID, UserLogin: ul},
 	}, nil
 }
-
-// errLoginNeedsOTP is an internal sentinel returned by runLogin when the
-// initial password POST succeeds with 202 (2FA required). The caller catches
-// it and prompts the user for an OTP code via buildOTPStep.
-var errLoginNeedsOTP = errors.New("reddit login: needs OTP")
 
 func serializeCookies(session *redditchat.RedditSession) (string, error) {
 	if session == nil || session.Client == nil || session.Client.Jar == nil {
