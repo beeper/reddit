@@ -77,3 +77,18 @@ func TestRedactionResolvesItsNativeTarget(t *testing.T) {
 		t.Fatal("different deletion proof accepted")
 	}
 }
+
+func TestHistorySkipsRemovalEventsWithoutSendingOrChangingMappings(t *testing.T) {
+	target := deletionFixture(t)
+	r := testClient(t, func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path != "/_matrix/client/v3/rooms/!room:reddit.com/messages" {
+			t.Error("history unexpectedly fetched a deletion or media", req.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"chunk": []*event.Event{target.Unsigned.RedactedBecause, target}})
+	})
+	// No local DB or Matrix intent: fetching history must only produce data.
+	resp, err := r.FetchMessages(context.Background(), bridgev2.FetchMessagesParams{Portal: historyPortal()})
+	if err != nil || resp.HasMore || len(resp.Messages) != 1 || !resp.Messages[0].Parts[0].DontBridge || len(resp.Messages[0].Reactions) != 0 {
+		t.Fatal("history did not suppress deleted content", err)
+	}
+}
