@@ -8,3 +8,8 @@ logs/
 !.github/workflows/*.yml
 !.gitlab-ci.yml
 .idea
+.env*
+*cookies*.json
+*storage-state*.json
+/evidence/
+/runtime/
