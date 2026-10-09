@@ -13,8 +13,12 @@ func (rc *RedditConnector) GetDBMetaTypes() database.MetaTypes {
 		Portal:    func() any { return &PortalMetadata{} },
 		Ghost:     nil,
 		Message:   nil,
-		Reaction:  nil,
+		Reaction:  func() any { return &ReactionMetadata{} },
 	}
+}
+
+type ReactionMetadata struct {
+	RemoteEventID id.EventID `json:"remote_event_id,omitempty"`
 }
 
 // UserLoginMetadata is persisted alongside each Reddit-connected user.

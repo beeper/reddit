@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -16,6 +17,7 @@ type RedditConnector struct {
 	Bridge           *bridgev2.Bridge
 	Config           Config
 	mediaUploadLimit atomic.Int64
+	emojiMu          sync.Mutex
 }
 
 var (

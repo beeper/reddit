@@ -16,6 +16,17 @@ func (r *RedditClient) convertMessage(ctx context.Context, portal *bridgev2.Port
 	if src == nil {
 		return nil, errors.New("nil source event")
 	}
+	if src.Unsigned.RedactedBecause != nil {
+		if portal == nil {
+			return nil, errors.New("deleted message requires a portal")
+		}
+		if err := validateTombstone(portal.PortalKey, src); err != nil {
+			return nil, unbridgeable(err)
+		}
+		return &bridgev2.ConvertedMessage{Parts: []*bridgev2.ConvertedMessagePart{{
+			ID: "", Type: event.EventMessage, Content: &event.MessageEventContent{}, DontBridge: true,
+		}}}, nil
+	}
 	if err := src.Content.ParseRaw(event.EventMessage); err != nil && !errors.Is(err, event.ErrContentAlreadyParsed) {
 		return nil, unbridgeable(err)
 	}

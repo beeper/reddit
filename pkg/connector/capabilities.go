@@ -14,6 +14,7 @@ import (
 func (rc *RedditConnector) GetCapabilities() *bridgev2.NetworkGeneralCapabilities {
 	return &bridgev2.NetworkGeneralCapabilities{
 		Provisioning: bridgev2.ProvisioningCapabilities{
+			ImagePackImport: true,
 			ResolveIdentifier: bridgev2.ResolveIdentifierCapabilities{
 				CreateDM: true,
 				Search:   true,
@@ -70,17 +71,18 @@ var stateCaps = event.StateFeatureMap{
 
 func (*RedditClient) GetCapabilities(ctx context.Context, portal *bridgev2.Portal) *event.RoomFeatures {
 	caps := (&event.RoomFeatures{
-		ID:              "com.beeper.reddit.capabilities.v10",
-		File:            fileCaps,
-		MaxTextLength:   MaxTextLength,
-		LocationMessage: event.CapLevelDropped,
-		Reply:           event.CapLevelFullySupported,
-		Thread:          event.CapLevelPartialSupport,
-		Edit:            event.CapLevelRejected,
-		Delete:          event.CapLevelFullySupported,
-		DeleteChat:      true,
-		DeleteMaxAge:    ptr.Ptr(jsontime.S(60 * time.Minute)),
-		Reaction:        event.CapLevelFullySupported,
+		ID:                   "com.beeper.reddit.capabilities.v10",
+		File:                 fileCaps,
+		MaxTextLength:        MaxTextLength,
+		LocationMessage:      event.CapLevelDropped,
+		Reply:                event.CapLevelFullySupported,
+		Thread:               event.CapLevelPartialSupport,
+		Edit:                 event.CapLevelRejected,
+		Delete:               event.CapLevelFullySupported,
+		DeleteChat:           true,
+		DeleteMaxAge:         ptr.Ptr(jsontime.S(60 * time.Minute)),
+		CustomEmojiReactions: true,
+		Reaction:             event.CapLevelFullySupported,
 		MessageRequest: &event.MessageRequestFeatures{
 			AcceptWithButton: event.CapLevelFullySupported,
 			// The SDK accepts first, then sends the user's message.

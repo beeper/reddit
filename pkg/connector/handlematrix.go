@@ -11,7 +11,6 @@ import (
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/event"
-	"maunium.net/go/mautrix/id"
 )
 
 var (
@@ -76,15 +75,20 @@ func (r *RedditClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.Matri
 }
 
 func (r *RedditClient) HandleMatrixMessageRemove(ctx context.Context, msg *bridgev2.MatrixMessageRemove) error {
-	if msg.TargetMessage == nil {
-		return errors.New("no redaction target")
+	txn, err := r.outgoingTransaction(msg.Portal, msg.Event, msg.InputTransactionID)
+	if err != nil {
+		return err
+	}
+	target, err := mappedTarget(msg.Portal, msg.TargetMessage)
+	if err != nil {
+		return err
 	}
 	roomID := portalIDToRoomID(msg.Portal.ID)
 	reason := ""
 	if msg.Content != nil {
 		reason = msg.Content.Reason
 	}
-	_, err := r.matrix().RedactEvent(ctx, roomID, messageIDToEventID(msg.TargetMessage.ID), mautrix.ReqRedact{Reason: reason})
+	_, err = r.matrix().RedactEvent(ctx, roomID, target, mautrix.ReqRedact{Reason: reason, TxnID: txn})
 	return err
 }
 
@@ -93,33 +97,55 @@ func (r *RedditClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev
 	if msg.Content != nil && msg.Content.RelatesTo.Key != "" {
 		emoji = msg.Content.RelatesTo.Key
 	}
+	key, err := r.resolveOutgoingReaction(ctx, emoji)
+	if err != nil {
+		return bridgev2.MatrixReactionPreResponse{}, err
+	}
 	return bridgev2.MatrixReactionPreResponse{
-		SenderID:     r.userID,
-		EmojiID:      networkid.EmojiID(emoji),
-		Emoji:        emoji,
-		MaxReactions: 1,
+		SenderID: r.userID,
+		EmojiID:  networkid.EmojiID(key),
+		Emoji:    emoji,
 	}, nil
 }
 
 func (r *RedditClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.MatrixReaction) (*database.Reaction, error) {
-	if msg.TargetMessage == nil {
-		return nil, errors.New("no reaction target")
-	}
-	roomID := portalIDToRoomID(msg.Portal.ID)
-	emoji := string(msg.PreHandleResp.EmojiID)
-	_, err := r.matrix().SendReaction(ctx, roomID, messageIDToEventID(msg.TargetMessage.ID), emoji)
+	txn, err := r.outgoingTransaction(msg.Portal, msg.Event, msg.InputTransactionID)
 	if err != nil {
 		return nil, err
 	}
-	return &database.Reaction{}, nil
+	target, err := mappedTarget(msg.Portal, msg.TargetMessage)
+	if err != nil {
+		return nil, err
+	}
+	if msg.PreHandleResp == nil || msg.PreHandleResp.EmojiID == "" {
+		return nil, errors.New("reaction has no emoji")
+	}
+	roomID := portalIDToRoomID(msg.Portal.ID)
+	emoji := string(msg.PreHandleResp.EmojiID)
+	resp, err := r.matrix().SendMessageEvent(ctx, roomID, event.EventReaction, &event.ReactionEventContent{RelatesTo: event.RelatesTo{Type: event.RelAnnotation, EventID: target, Key: emoji}}, mautrix.ReqSendEvent{TransactionID: txn})
+	if err != nil {
+		return nil, err
+	}
+	if resp.EventID == "" {
+		return nil, errors.New("reddit returned no reaction identity")
+	}
+	return &database.Reaction{Metadata: &ReactionMetadata{RemoteEventID: resp.EventID}}, nil
 }
 
 func (r *RedditClient) HandleMatrixReactionRemove(ctx context.Context, msg *bridgev2.MatrixReactionRemove) error {
-	if msg.TargetReaction == nil {
+	txn, err := r.outgoingTransaction(msg.Portal, msg.Event, msg.InputTransactionID)
+	if err != nil {
+		return err
+	}
+	if msg.TargetReaction == nil || msg.TargetReaction.Room != msg.Portal.PortalKey {
 		return errors.New("no reaction to remove")
 	}
+	meta, ok := msg.TargetReaction.Metadata.(*ReactionMetadata)
+	if !ok || meta.RemoteEventID == "" {
+		return errors.New("reaction has no Reddit event mapping")
+	}
 	roomID := portalIDToRoomID(msg.Portal.ID)
-	_, err := r.matrix().RedactEvent(ctx, roomID, id.EventID(msg.TargetReaction.MXID), mautrix.ReqRedact{})
+	_, err = r.matrix().RedactEvent(ctx, roomID, meta.RemoteEventID, mautrix.ReqRedact{TxnID: txn})
 	return err
 }
 
@@ -128,7 +154,7 @@ func (r *RedditClient) HandleMatrixReadReceipt(ctx context.Context, msg *bridgev
 	if msg.ExactMessage == nil {
 		return nil
 	}
-	return r.rc.MarkRead(ctx, roomID, messageIDToEventID(msg.ExactMessage.ID))
+	return r.remote().MarkRead(ctx, roomID, messageIDToEventID(msg.ExactMessage.ID))
 }
 
 func (r *RedditClient) HandleMatrixTyping(ctx context.Context, msg *bridgev2.MatrixTyping) error {
@@ -142,6 +168,9 @@ func (r *RedditClient) HandleMatrixTyping(ctx context.Context, msg *bridgev2.Mat
 }
 
 func (r *RedditClient) HandleMatrixRoomName(ctx context.Context, msg *bridgev2.MatrixRoomName) (bool, error) {
+	if msg.Portal.RoomType == database.RoomTypeDM {
+		return false, bridgev2.ErrRoomMetadataNotAllowed
+	}
 	roomID := portalIDToRoomID(msg.Portal.ID)
 	if msg.Content == nil {
 		return false, nil

@@ -299,11 +299,11 @@ func (r *RedditClient) handleTimelineEvent(ctx context.Context, portalKey networ
 	}
 	switch evt.Type {
 	case event.EventMessage:
-		r.queueMessage(ctx, portalKey, evt)
+		return r.queueMessage(ctx, portalKey, evt)
 	case event.EventRedaction:
-		r.queueRedaction(portalKey, evt)
+		return r.queueRedaction(ctx, portalKey, evt)
 	case event.EventReaction:
-		r.queueReaction(portalKey, evt)
+		return r.queueReaction(ctx, portalKey, evt)
 	default:
 		// Membership, name, avatar changes etc. are picked up by the next
 		// ChatResync. Typing/receipts come through ephemeral events.
@@ -323,60 +323,52 @@ func (r *RedditClient) joinedRoomEvent(state *RoomState, key networkid.PortalKey
 	}
 }
 
-func (r *RedditClient) queueMessage(ctx context.Context, portalKey networkid.PortalKey, evt *event.Event) {
-	sender := r.makeSender(evt.Sender)
+func (r *RedditClient) queueMessage(ctx context.Context, key networkid.PortalKey, evt *event.Event) error {
+	if evt.Unsigned.RedactedBecause != nil {
+		removal, err := r.convertDeletedEvent(key, evt)
+		if err != nil {
+			return unbridgeable(err)
+		}
+		r.userLogin.QueueRemoteEvent(removal)
+		return nil
+	}
 	r.userLogin.QueueRemoteEvent(&simplevent.Message[*event.Event]{
 		EventMeta: simplevent.EventMeta{
-			Type:         bridgev2.RemoteEventMessage,
-			PortalKey:    portalKey,
-			Sender:       sender,
-			CreatePortal: true,
-			Timestamp:    time.UnixMilli(evt.Timestamp),
+			Type: bridgev2.RemoteEventMessage, PortalKey: key,
+			Sender: r.makeSender(evt.Sender), CreatePortal: true,
+			Timestamp: time.UnixMilli(evt.Timestamp),
 		},
-		ID:                 makeMessageID(evt.ID),
-		TransactionID:      networkid.TransactionID(evt.Unsigned.TransactionID),
-		Data:               evt,
-		ConvertMessageFunc: r.convertMessage,
+		ID: makeMessageID(evt.ID), TransactionID: networkid.TransactionID(evt.Unsigned.TransactionID),
+		Data: evt, ConvertMessageFunc: r.convertMessage,
 	})
+	return nil
 }
 
-func (r *RedditClient) queueRedaction(portalKey networkid.PortalKey, evt *event.Event) {
-	target := id.EventID(evt.Redacts)
-	if target == "" {
-		if content, ok := evt.Content.Parsed.(*event.RedactionEventContent); ok {
-			target = content.Redacts
+func (r *RedditClient) queueRedaction(ctx context.Context, key networkid.PortalKey, evt *event.Event) error {
+	removal, err := r.convertRedaction(ctx, key, evt)
+	if err != nil {
+		return err
+	}
+	r.userLogin.QueueRemoteEvent(removal)
+	return nil
+}
+
+func (r *RedditClient) queueReaction(ctx context.Context, key networkid.PortalKey, evt *event.Event) error {
+	if evt.Unsigned.RedactedBecause != nil {
+		// Old sync responses may retain the original reaction content.
+		removal, err := r.convertDeletedEvent(key, evt)
+		if err != nil {
+			return unbridgeable(err)
 		}
+		r.userLogin.QueueRemoteEvent(removal)
+		return nil
 	}
-	if target == "" {
-		return
+	reaction, err := r.convertReaction(ctx, key, evt)
+	if err != nil {
+		return err
 	}
-	r.userLogin.QueueRemoteEvent(&simplevent.MessageRemove{
-		EventMeta: simplevent.EventMeta{
-			Type:      bridgev2.RemoteEventMessageRemove,
-			PortalKey: portalKey,
-			Sender:    r.makeSender(evt.Sender),
-			Timestamp: time.UnixMilli(evt.Timestamp),
-		},
-		TargetMessage: makeMessageID(target),
-	})
-}
-
-func (r *RedditClient) queueReaction(portalKey networkid.PortalKey, evt *event.Event) {
-	content, ok := evt.Content.Parsed.(*event.ReactionEventContent)
-	if !ok || content.RelatesTo.EventID == "" {
-		return
-	}
-	r.userLogin.QueueRemoteEvent(&simplevent.Reaction{
-		EventMeta: simplevent.EventMeta{
-			Type:      bridgev2.RemoteEventReaction,
-			PortalKey: portalKey,
-			Sender:    r.makeSender(evt.Sender),
-			Timestamp: time.UnixMilli(evt.Timestamp),
-		},
-		EmojiID:       networkid.EmojiID(content.RelatesTo.Key),
-		Emoji:         content.RelatesTo.Key,
-		TargetMessage: makeMessageID(content.RelatesTo.EventID),
-	})
+	r.userLogin.QueueRemoteEvent(reaction)
+	return nil
 }
 
 const redditDMPreset = "reddit_dm"
