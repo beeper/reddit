@@ -38,6 +38,9 @@ type RedditClient struct {
 	saveMu sync.Mutex
 	roomMu sync.RWMutex
 	rooms  map[id.RoomID]*RoomState
+
+	typingMu sync.Mutex
+	typing   map[networkid.PortalKey][]id.UserID
 }
 
 var _ bridgev2.NetworkAPI = (*RedditClient)(nil)

@@ -253,6 +253,7 @@ func (r *RedditClient) handleRoomUpdate(ctx context.Context, roomID id.RoomID, j
 			return err
 		}
 	}
+	r.handleEphemeralEvents(ctx, portalKey, joined.Ephemeral.Events)
 	return nil
 }
 
