@@ -45,8 +45,9 @@ func (r *RedditClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (
 		mxc := resp.AvatarURL.CUString()
 		info.Avatar = &bridgev2.Avatar{
 			ID:  networkid.AvatarID(mxc),
-			MXC: mxc,
+			Get: func(ctx context.Context) ([]byte, error) { return r.downloadRedditMedia(ctx, mxc, nil) },
 		}
+
 	}
 	return info, nil
 }

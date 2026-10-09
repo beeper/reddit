@@ -27,43 +27,52 @@ func (r *RedditClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Ma
 	if !r.IsLoggedIn() {
 		return nil, errors.New("not logged in to Reddit")
 	}
-	roomID := portalIDToRoomID(msg.Portal.ID)
-	content := msg.Content
-	if content == nil {
-		return nil, errors.New("missing message content")
+	txn, err := r.outgoingTransaction(msg.Portal, msg.Event, msg.InputTransactionID)
+	if err != nil {
+		return nil, err
 	}
-	resp, err := r.rc.SendMessage(ctx, roomID, content)
+	content, err := outgoingContent(msg)
+	if err != nil {
+		return nil, err
+	}
+	// Beeper represents GIF attachments as m.video + fi.mau.gif. Reddit
+	// accepts the original GIF bytes as an image, not an ordinary video.
+	if content.GetCapMsgType() == event.CapMsgGIF && content.Info.MimeType == "image/gif" {
+		content.MsgType = event.MsgImage
+		copyMediaInfo(content)
+		content.Info.MauGIF = false
+	}
+	switch content.MsgType {
+	case event.MsgImage:
+		if err = r.sendMedia(ctx, content); err != nil {
+			return nil, err
+		}
+	case event.MsgText, event.MsgNotice, event.MsgEmote:
+	default:
+		return nil, bridgev2.ErrUnsupportedMessageType
+	}
+	resp, err := r.remote().SendMessage(ctx, portalIDToRoomID(msg.Portal.ID), content, mautrix.ReqSendEvent{TransactionID: txn})
 	if err != nil {
 		return nil, fmt.Errorf("send to reddit: %w", err)
 	}
+	if resp.EventID == "" {
+		return nil, errors.New("reddit returned no message identity")
+	}
 	return &bridgev2.MatrixMessageResponse{
 		DB: &database.Message{
-			ID:        makeMessageID(resp.EventID),
-			MXID:      msg.Event.ID,
-			SenderID:  r.userID,
-			Timestamp: time.UnixMilli(msg.Event.Timestamp),
+			ID:         makeMessageID(resp.EventID),
+			SendTxnID:  msg.InputTransactionID,
+			SenderID:   r.userID,
+			Timestamp:  time.UnixMilli(msg.Event.Timestamp),
+			ThreadRoot: makeMessageID(content.RelatesTo.GetThreadParent()),
 		},
 	}, nil
 }
 
 func (r *RedditClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEdit) error {
-	if msg.EditTarget == nil {
-		return errors.New("no edit target")
-	}
-	roomID := portalIDToRoomID(msg.Portal.ID)
-	content := msg.Content
-	if content == nil {
-		return errors.New("missing edit content")
-	}
-	// Forward the m.replace relation as-is to Reddit's Matrix homeserver.
-	if content.RelatesTo == nil {
-		content.RelatesTo = &event.RelatesTo{
-			Type:    event.RelReplace,
-			EventID: messageIDToEventID(msg.EditTarget.ID),
-		}
-	}
-	_, err := r.rc.SendMessage(ctx, roomID, content)
-	return err
+	// The observed Reddit Chat menu has no edit action. Do not claim support or
+	// turn an attempted edit into a second message while that contract is unknown.
+	return bridgev2.ErrEditsNotSupported
 }
 
 func (r *RedditClient) HandleMatrixMessageRemove(ctx context.Context, msg *bridgev2.MatrixMessageRemove) error {

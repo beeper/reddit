@@ -10,22 +10,34 @@ import (
 )
 
 // convertMessage turns a Reddit-side m.room.message event into a bridgev2
-// ConvertedMessage. Because Reddit chat is itself Matrix-backed, the content
-// shape on both sides is the same Matrix event format; we mostly forward it.
-// Media URIs that point at Reddit's homeserver are still served over Matrix
-// so consumers (Beeper homeserver) can fetch them via the standard media API.
+// ConvertedMessage. Event IDs belong to different servers: relation targets
+// must be resolved by bridgev2 rather than forwarding Reddit IDs to Beeper.
 func (r *RedditClient) convertMessage(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, src *event.Event) (*bridgev2.ConvertedMessage, error) {
 	if src == nil {
 		return nil, errors.New("nil source event")
 	}
-	content, ok := src.Content.Parsed.(*event.MessageEventContent)
-	if !ok {
-		// Fall back to raw content.
-		content = &event.MessageEventContent{}
-		_ = src.Content.ParseRaw(event.EventMessage)
-		if parsed, ok := src.Content.Parsed.(*event.MessageEventContent); ok {
-			content = parsed
+	if err := src.Content.ParseRaw(event.EventMessage); err != nil && !errors.Is(err, event.ErrContentAlreadyParsed) {
+		return nil, unbridgeable(err)
+	}
+	original, ok := src.Content.Parsed.(*event.MessageEventContent)
+	if !ok || original == nil {
+		return nil, unbridgeable(errors.New("reddit message has invalid content"))
+	}
+	if original.RelatesTo.GetReplaceID() != "" {
+		return nil, unbridgeable(errors.New("reddit edit requires reconciliation; refusing to create a duplicate message"))
+	}
+	content := *original
+	content.RemoveReplyFallback()
+	content.RelatesTo = nil
+	content.NewContent = nil
+	switch content.MsgType {
+	case event.MsgImage:
+		if err := r.receiveMedia(ctx, portal, intent, &content); err != nil {
+			return nil, err
 		}
+	case event.MsgText, event.MsgNotice, event.MsgEmote:
+	default:
+		return nil, bridgev2.ErrUnsupportedMessageType
 	}
 
 	out := &bridgev2.ConvertedMessage{
@@ -33,19 +45,19 @@ func (r *RedditClient) convertMessage(ctx context.Context, portal *bridgev2.Port
 			{
 				ID:      networkid.PartID(""),
 				Type:    event.EventMessage,
-				Content: content,
+				Content: &content,
 			},
 		},
 	}
 
 	// Translate m.relates_to into bridgev2's reply field so threading works
 	// across the bridge.
-	if content.RelatesTo != nil {
-		if content.RelatesTo.InReplyTo != nil && content.RelatesTo.InReplyTo.EventID != "" {
-			out.ReplyTo = &networkid.MessageOptionalPartID{
-				MessageID: makeMessageID(content.RelatesTo.InReplyTo.EventID),
-			}
-		}
+	if target := original.RelatesTo.GetNonFallbackReplyTo(); target != "" {
+		out.ReplyTo = &networkid.MessageOptionalPartID{MessageID: makeMessageID(target)}
+	}
+	if root := original.RelatesTo.GetThreadParent(); root != "" {
+		mappedRoot := makeMessageID(root)
+		out.ThreadRoot = &mappedRoot
 	}
 	return out, nil
 }

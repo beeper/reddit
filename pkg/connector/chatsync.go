@@ -334,6 +334,7 @@ func (r *RedditClient) queueMessage(ctx context.Context, portalKey networkid.Por
 			Timestamp:    time.UnixMilli(evt.Timestamp),
 		},
 		ID:                 makeMessageID(evt.ID),
+		TransactionID:      networkid.TransactionID(evt.Unsigned.TransactionID),
 		Data:               evt,
 		ConvertMessageFunc: r.convertMessage,
 	})

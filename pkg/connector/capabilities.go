@@ -7,6 +7,7 @@ import (
 	"go.mau.fi/util/jsontime"
 	"go.mau.fi/util/ptr"
 	"maunium.net/go/mautrix/bridgev2"
+	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/event"
 )
 
@@ -33,20 +34,12 @@ const (
 	MaxFileSize   = 20 * 1024 * 1024
 )
 
-var formattingCaps = event.FormattingFeatureMap{
-	event.FmtBold:          event.CapLevelFullySupported,
-	event.FmtItalic:        event.CapLevelFullySupported,
-	event.FmtStrikethrough: event.CapLevelFullySupported,
-	event.FmtInlineCode:    event.CapLevelFullySupported,
-	event.FmtCodeBlock:     event.CapLevelFullySupported,
-	event.FmtBlockquote:    event.CapLevelFullySupported,
-	event.FmtInlineLink:    event.CapLevelFullySupported,
-	event.FmtUserLink:      event.CapLevelFullySupported,
-	event.FmtUnorderedList: event.CapLevelFullySupported,
-	event.FmtOrderedList:   event.CapLevelFullySupported,
-}
-
 var fileCaps = event.FileFeatureMap{
+	event.CapMsgGIF: {
+		MimeTypes: map[string]event.CapabilitySupportLevel{"image/gif": event.CapLevelFullySupported},
+		Caption:   event.CapLevelRejected,
+		MaxSize:   MaxFileSize,
+	},
 	event.MsgImage: {
 		MimeTypes: map[string]event.CapabilitySupportLevel{
 			"image/gif":  event.CapLevelFullySupported,
@@ -54,26 +47,20 @@ var fileCaps = event.FileFeatureMap{
 			"image/png":  event.CapLevelFullySupported,
 			"image/webp": event.CapLevelFullySupported,
 		},
-		Caption:          event.CapLevelFullySupported,
-		MaxCaptionLength: MaxTextLength,
-		MaxSize:          MaxFileSize,
+		// Reddit keeps the body as image alt text, but does not show captions.
+		// Its own composer sends accompanying text as a separate message.
+		Caption: event.CapLevelRejected,
+		MaxSize: MaxFileSize,
 	},
 	event.MsgVideo: {
 		MimeTypes: map[string]event.CapabilitySupportLevel{
-			"video/mp4":       event.CapLevelFullySupported,
-			"video/quicktime": event.CapLevelFullySupported,
+			"*/*": event.CapLevelRejected,
 		},
-		Caption:          event.CapLevelFullySupported,
-		MaxCaptionLength: MaxTextLength,
-		MaxSize:          MaxFileSize,
 	},
 	event.MsgFile: {
 		MimeTypes: map[string]event.CapabilitySupportLevel{
-			"*/*": event.CapLevelFullySupported,
+			"*/*": event.CapLevelRejected,
 		},
-		Caption:          event.CapLevelFullySupported,
-		MaxCaptionLength: MaxTextLength,
-		MaxSize:          MaxFileSize,
 	},
 }
 
@@ -82,26 +69,30 @@ var stateCaps = event.StateFeatureMap{
 }
 
 func (*RedditClient) GetCapabilities(ctx context.Context, portal *bridgev2.Portal) *event.RoomFeatures {
-	return &event.RoomFeatures{
-		ID:                  "com.beeper.reddit.capabilities.v1",
-		Formatting:          formattingCaps,
-		File:                fileCaps,
-		MaxTextLength:       MaxTextLength,
-		LocationMessage:     event.CapLevelDropped,
-		Reply:               event.CapLevelFullySupported,
-		Edit:                event.CapLevelFullySupported,
-		EditMaxAge:          ptr.Ptr(jsontime.S(60 * time.Minute)),
-		DeleteChat:          true,
-		MessageRequest:      &event.MessageRequestFeatures{AcceptWithButton: event.CapLevelFullySupported, AcceptWithMessage: event.CapLevelPartialSupport},
-		Delete:              event.CapLevelFullySupported,
-		DeleteMaxAge:        ptr.Ptr(jsontime.S(60 * time.Minute)),
-		Reaction:            event.CapLevelFullySupported,
+	caps := (&event.RoomFeatures{
+		ID:              "com.beeper.reddit.capabilities.v10",
+		File:            fileCaps,
+		MaxTextLength:   MaxTextLength,
+		LocationMessage: event.CapLevelDropped,
+		Reply:           event.CapLevelFullySupported,
+		Thread:          event.CapLevelPartialSupport,
+		Edit:            event.CapLevelRejected,
+		Delete:          event.CapLevelFullySupported,
+		DeleteChat:      true,
+		DeleteMaxAge:    ptr.Ptr(jsontime.S(60 * time.Minute)),
+		Reaction:        event.CapLevelFullySupported,
+		MessageRequest: &event.MessageRequestFeatures{
+			AcceptWithButton: event.CapLevelFullySupported,
+			// The SDK accepts first, then sends the user's message.
+			AcceptWithMessage: event.CapLevelPartialSupport,
+		},
 		ReadReceipts:        true,
 		TypingNotifications: true,
 		State:               stateCaps,
-		MemberActions: map[event.MemberAction]event.CapabilitySupportLevel{
-			event.MemberActionInvite: event.CapLevelFullySupported,
-			event.MemberActionKick:   event.CapLevelFullySupported,
-		},
+	}).Clone()
+	if portal != nil && portal.RoomType == database.RoomTypeDM {
+		caps.ID += ".dm"
+		caps.State[event.StateRoomName.Type].Level = event.CapLevelRejected
 	}
+	return caps
 }
