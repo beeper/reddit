@@ -123,8 +123,13 @@ func (r *RedditClient) HandleMatrixReadReceipt(ctx context.Context, msg *bridgev
 }
 
 func (r *RedditClient) HandleMatrixTyping(ctx context.Context, msg *bridgev2.MatrixTyping) error {
+	// Reddit requires joined membership for typing. Composing a reply must
+	// not accept the request; bridgev2 clears this flag after explicit acceptance.
+	if msg.Portal.MessageRequest {
+		return nil
+	}
 	roomID := portalIDToRoomID(msg.Portal.ID)
-	return r.rc.SetTyping(ctx, roomID, msg.IsTyping, 30*time.Second)
+	return r.remote().SetTyping(ctx, roomID, msg.IsTyping, 30*time.Second)
 }
 
 func (r *RedditClient) HandleMatrixRoomName(ctx context.Context, msg *bridgev2.MatrixRoomName) (bool, error) {

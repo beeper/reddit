@@ -2,13 +2,14 @@ package connector
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/bridgev2"
+	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/bridgev2/simplevent"
 	"maunium.net/go/mautrix/bridgev2/status"
@@ -20,11 +21,15 @@ import (
 
 // runSync is the long-poll loop that translates Reddit-Matrix sync responses
 // into bridgev2 RemoteEvents. It exits when the context is cancelled.
-func (r *RedditClient) runSync(ctx context.Context) {
+func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 	defer func() {
-		if r.syncDone != nil {
-			close(r.syncDone)
+		r.syncMu.Lock()
+		if r.syncDone == done {
+			r.syncCancel = nil
+			r.syncDone = nil
 		}
+		close(done)
+		r.syncMu.Unlock()
 	}()
 	log := zerolog.Ctx(ctx)
 
@@ -35,29 +40,43 @@ func (r *RedditClient) runSync(ctx context.Context) {
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		resp, err := r.rc.Sync(ctx, r.meta.NextBatch, timeoutMS)
+		since := r.meta.NextBatch
+		if r.meta.RoomStateVersion < 4 {
+			since = ""
+		}
+		resp, err := r.remote().Sync(ctx, since, timeoutMS)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return
 			}
-			// 401 means the chat token expired. Try to refresh once.
+			// An expired chat token may still have a renewable Reddit session.
 			if isUnauthorized(err) {
-				if refreshErr := r.refreshChatToken(ctx); refreshErr != nil {
-					log.Error().Err(refreshErr).Msg("Failed to refresh Reddit chat token")
+				refreshErr := r.refreshChatToken(ctx)
+				if refreshErr == nil {
+					continue
+				}
+				if ctx.Err() != nil {
+					return
+				}
+				if refreshNeedsLogin(refreshErr) {
+					log.Warn().Err(refreshErr).Msg("Reddit session requires reauthentication")
 					r.userLogin.BridgeState.Send(status.BridgeState{
 						StateEvent: status.StateBadCredentials,
 						Error:      "reddit-token-refresh-failed",
 						Message:    refreshErr.Error(),
+						UserAction: status.UserActionRelogin,
 					})
 					return
 				}
-				continue
+				// Provider outages, rate limits and local save failures retain the
+				// existing session and retry through the normal native poll loop.
+				err = refreshErr
 			}
 			log.Warn().Err(err).Msg("Sync failed, backing off")
 			r.userLogin.BridgeState.Send(status.BridgeState{
 				StateEvent: status.StateTransientDisconnect,
 				Error:      "reddit-sync-error",
-				Message:    err.Error(),
+				Message:    "Unable to synchronize Reddit chats. Retrying automatically.",
 			})
 			select {
 			case <-time.After(backoff):
@@ -67,73 +86,216 @@ func (r *RedditClient) runSync(ctx context.Context) {
 			continue
 		}
 
-		// First successful sync after (re)connect: mark connected.
+		err = r.handleSync(ctx, resp, &roomSnapshots{})
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to process Reddit sync; retaining cursor")
+			r.userLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateTransientDisconnect, Error: "reddit-sync-apply-failed", Message: "Unable to synchronize Reddit chat state. Retrying."})
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return
+			}
+			continue
+		}
+		// All framework event calls have returned. Advance the native token;
+		// event delivery and crash safety belong to bridgev2 and its runtime.
+		previousCursor, previousVersion := r.meta.NextBatch, r.meta.RoomStateVersion
+		r.meta.NextBatch, r.meta.RoomStateVersion = resp.NextBatch, 4
+		if err = r.saveMeta(ctx); err != nil {
+			r.meta.NextBatch, r.meta.RoomStateVersion = previousCursor, previousVersion
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return
+			}
+			continue
+		}
+		// First successfully processed sync after (re)connect: mark connected.
 		if r.userLogin.BridgeState.GetPrevUnsent().StateEvent != status.StateConnected {
 			r.userLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
 		}
 
-		r.handleSync(ctx, resp)
-		r.meta.NextBatch = resp.NextBatch
-		r.saveMeta(ctx)
 	}
 }
 
-func (r *RedditClient) handleSync(ctx context.Context, resp *redditchat.SyncResponse) {
+// Unbridgeable native data is skipped so it cannot hold the cursor forever.
+// Any other failure retries the whole batch.
+func (r *RedditClient) handleSync(ctx context.Context, resp *redditchat.SyncResponse, snapshots *roomSnapshots) error {
+	unhidden, err := r.applyHiddenChatData(ctx, resp)
+	if err != nil {
+		return err
+	}
 	for roomID, joined := range resp.Rooms.Join {
-		r.handleJoinedRoom(ctx, roomID, joined)
+		if r.meta.HiddenRooms[roomID] {
+			continue
+		}
+		if err = skipUnbridgeable(ctx, r.handleRoomUpdate(ctx, roomID, joined, snapshots), roomID, ""); err != nil {
+			return err
+		}
 	}
 	for roomID, invited := range resp.Rooms.Invite {
-		r.handleInvitedRoom(ctx, roomID, invited)
+		if r.meta.HiddenRooms[roomID] {
+			continue
+		}
+		if err = skipUnbridgeable(ctx, r.handleInvitedRoom(ctx, roomID, invited), roomID, ""); err != nil {
+			return err
+		}
+	}
+	// Pending requests receive subsequent messages in rooms.peek. Process
+	// invitation state first, then use the same queue/backfill path as joined
+	// timelines. Membership comes from state, never from the response bucket.
+	for roomID, peek := range resp.Rooms.Peek {
+		if peek == nil || r.meta.HiddenRooms[roomID] || resp.Rooms.Join[roomID] != nil || resp.Rooms.Leave[roomID] != nil {
+			continue
+		}
+		if len(peek.State.Events)+len(peek.Timeline.Events)+len(peek.Ephemeral.Events) == 0 {
+			continue
+		}
+		if err = skipUnbridgeable(ctx, r.handleRoomUpdate(ctx, roomID, peek, snapshots), roomID, ""); err != nil {
+			return err
+		}
 	}
 	for roomID := range resp.Rooms.Leave {
-		r.handleLeftRoom(ctx, roomID)
+		if err = r.handleLeftRoom(ctx, roomID); err != nil {
+			return err
+		}
 	}
+	if len(unhidden) > 0 {
+		state, err := r.fetchRoomSnapshots(ctx, snapshots, unhidden)
+		if err != nil {
+			return err
+		}
+		return r.handleSync(ctx, state, snapshots)
+	}
+	return nil
 }
 
-func (r *RedditClient) handleJoinedRoom(ctx context.Context, roomID id.RoomID, joined *mautrix.SyncJoinedRoom) {
-	isDM := r.detectIsDM(joined.State.Events, joined.Timeline.Events)
-	portalKey := r.makePortalKey(roomID, isDM)
+func skipUnbridgeable(ctx context.Context, err error, roomID id.RoomID, eventID id.EventID) error {
+	if !isUnbridgeable(err) {
+		return err
+	}
+	zerolog.Ctx(ctx).Warn().Err(err).Stringer("room_id", roomID).Stringer("event_id", eventID).Msg("Skipping unbridgeable Reddit data")
+	return nil
+}
 
-	// Emit a ChatResync per room: bridgev2 deduplicates so we can do this every
-	// sync without spamming. The GetChatInfoFunc closure resolves room name,
-	// members, etc. lazily from the Reddit Matrix homeserver.
-	r.userLogin.QueueRemoteEvent(&simplevent.ChatResync{
-		EventMeta: simplevent.EventMeta{
-			Type:         bridgev2.RemoteEventChatResync,
-			PortalKey:    portalKey,
-			CreatePortal: true,
-		},
-		GetChatInfoFunc: func(ctx context.Context, portal *bridgev2.Portal) (*bridgev2.ChatInfo, error) {
-			return r.fetchChatInfo(ctx, roomID, isDM, *joined)
-		},
-	})
+func (r *RedditClient) applyHiddenChatData(ctx context.Context, resp *redditchat.SyncResponse) ([]id.RoomID, error) {
+	var unhidden []id.RoomID
+	// Apply account data before invitations: full native sync includes hidden
+	// DMs in both peek and invite. Never mistake a preview for membership.
+	for _, rooms := range []map[id.RoomID]*mautrix.SyncJoinedRoom{resp.Rooms.Join, resp.Rooms.Peek} {
+		for roomID, room := range rooms {
+			if room == nil {
+				continue
+			}
+			for _, evt := range room.AccountData.Events {
+				if evt == nil || evt.Type.Type != "com.reddit.hidden_chat" {
+					continue
+				}
+				hidden, err := parseHiddenChat(evt)
+				if err != nil {
+					zerolog.Ctx(ctx).Warn().Err(err).Stringer("room_id", roomID).Stringer("event_id", evt.ID).Msg("Skipping unbridgeable Reddit hidden chat state")
+					continue
+				}
+				if hidden {
+					if r.meta.HiddenRooms == nil {
+						r.meta.HiddenRooms = make(map[id.RoomID]bool)
+					}
+					r.meta.HiddenRooms[roomID] = true
+					if err = r.handleLeftRoom(ctx, roomID); err != nil {
+						return nil, err
+					}
+				} else {
+					delete(r.meta.HiddenRooms, roomID)
+					if resp.Rooms.Join[roomID] == nil && resp.Rooms.Invite[roomID] == nil {
+						unhidden = append(unhidden, roomID)
+					}
+				}
+			}
+		}
+	}
+	return unhidden, nil
+}
+
+func parseHiddenChat(evt *event.Event) (bool, error) {
+	var content struct {
+		Hidden *bool `json:"hidden"`
+	}
+	raw, err := json.Marshal(&evt.Content)
+	if err != nil {
+		return false, err
+	}
+	if err = json.Unmarshal(raw, &content); err != nil {
+		return false, err
+	}
+	if content.Hidden == nil {
+		return false, errors.New("reddit hidden chat state has no hidden flag")
+	}
+	return *content.Hidden, nil
+}
+
+func (r *RedditClient) handleRoomUpdate(ctx context.Context, roomID id.RoomID, joined *mautrix.SyncJoinedRoom, snapshots *roomSnapshots) error {
+	if joined == nil {
+		return unbridgeable(errors.New("reddit sync contains a null room"))
+	}
+	state, portalKey, err := r.resolveRoomState(ctx, roomID, joined, snapshots)
+	if err != nil {
+		return err
+	}
+
+	resync := r.joinedRoomEvent(state, portalKey, joined.Timeline.Limited)
+	r.userLogin.QueueRemoteEvent(resync)
 
 	for _, evt := range joined.Timeline.Events {
-		r.handleTimelineEvent(ctx, portalKey, evt)
+		if evt == nil {
+			continue
+		}
+		if err = skipUnbridgeable(ctx, r.handleTimelineEvent(ctx, portalKey, evt), roomID, evt.ID); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func (r *RedditClient) handleInvitedRoom(ctx context.Context, roomID id.RoomID, invited *mautrix.SyncInvitedRoom) {
-	// For now we auto-accept invites by joining and letting the next sync
-	// surface the room as joined. Reddit DMs arrive as invites.
-	if _, err := r.matrix().JoinRoomByID(ctx, roomID); err != nil {
-		zerolog.Ctx(ctx).Warn().Err(err).Stringer("room_id", roomID).Msg("Failed to auto-accept Reddit invite")
+func (r *RedditClient) handleInvitedRoom(ctx context.Context, roomID id.RoomID, invited *mautrix.SyncInvitedRoom) error {
+	joined, err := r.inviteSnapshot(invited)
+	if err != nil {
+		return unbridgeable(err)
 	}
+	state, key, err := r.roomState(ctx, roomID, joined)
+	if err != nil {
+		return err
+	}
+	request := r.pendingRequestEvent(state, key)
+	// Receiving an invitation must never join the remote room. Only an
+	// explicit acceptance or a user reply may cross that boundary.
+	r.userLogin.QueueRemoteEvent(request)
+	return nil
 }
 
-func (r *RedditClient) handleLeftRoom(ctx context.Context, roomID id.RoomID) {
-	r.userLogin.QueueRemoteEvent(&simplevent.ChatDelete{
+func (r *RedditClient) handleLeftRoom(ctx context.Context, roomID id.RoomID) error {
+	portal, err := r.savedRoomPortal(ctx, roomID)
+	if err != nil || portal == nil {
+		return err
+	}
+	deletion := &simplevent.ChatDelete{
 		EventMeta: simplevent.EventMeta{
 			Type:      bridgev2.RemoteEventChatDelete,
-			PortalKey: networkid.PortalKey{ID: makePortalID(roomID), Receiver: r.userLogin.ID},
+			PortalKey: portal.PortalKey,
 		},
 		OnlyForMe: true,
-	})
+	}
+	r.userLogin.QueueRemoteEvent(deletion)
+	return nil
 }
 
-func (r *RedditClient) handleTimelineEvent(ctx context.Context, portalKey networkid.PortalKey, evt *event.Event) {
-	if evt == nil {
-		return
+func (r *RedditClient) handleTimelineEvent(ctx context.Context, portalKey networkid.PortalKey, evt *event.Event) error {
+	if evt.Type == event.EventMessage || evt.Type == event.EventReaction || evt.Type == event.EventRedaction {
+		if evt.ID == "" || evt.Sender == "" || (evt.RoomID != "" && makePortalID(evt.RoomID) != portalKey.ID) {
+			return unbridgeable(errors.New("reddit timeline event has invalid room or event identity"))
+		}
+		if err := evt.Content.ParseRaw(evt.Type); err != nil && !errors.Is(err, event.ErrContentAlreadyParsed) {
+			return unbridgeable(err)
+		}
 	}
 	switch evt.Type {
 	case event.EventMessage:
@@ -144,8 +306,20 @@ func (r *RedditClient) handleTimelineEvent(ctx context.Context, portalKey networ
 		r.queueReaction(portalKey, evt)
 	default:
 		// Membership, name, avatar changes etc. are picked up by the next
-		// ChatResync's GetChatInfoFunc; no per-event handling needed for the
-		// MVP. Typing/receipts come through ephemeral events, not timeline.
+		// ChatResync. Typing/receipts come through ephemeral events.
+	}
+	return nil
+}
+
+// Let bridgev2 choose the catch-up anchor and run FetchMessages, as Slack does.
+func (r *RedditClient) joinedRoomEvent(state *RoomState, key networkid.PortalKey, limited bool) *simplevent.ChatResync {
+	info := r.chatInfoFromState(state)
+	return &simplevent.ChatResync{
+		EventMeta: simplevent.EventMeta{Type: bridgev2.RemoteEventChatResync, PortalKey: key, CreatePortal: true},
+		ChatInfo:  info,
+		CheckNeedsBackfillFunc: func(_ context.Context, latest *database.Message) (bool, error) {
+			return info.CanBackfill && (limited || latest == nil), nil
+		},
 	}
 }
 
@@ -202,36 +376,6 @@ func (r *RedditClient) queueReaction(portalKey networkid.PortalKey, evt *event.E
 		Emoji:         content.RelatesTo.Key,
 		TargetMessage: makeMessageID(content.RelatesTo.EventID),
 	})
-}
-
-// detectIsDM inspects state and a few timeline events for the m.room.create
-// preset or the is_direct flag. Reddit DM rooms are created with preset
-// "reddit_dm" — that's stored in m.room.create's content.
-func (r *RedditClient) detectIsDM(state []*event.Event, timeline []*event.Event) bool {
-	check := func(evts []*event.Event) (bool, bool) {
-		for _, e := range evts {
-			if e.Type != event.StateCreate {
-				continue
-			}
-			raw, _ := e.Content.Raw["preset"].(string)
-			if strings.EqualFold(raw, redditDMPreset) {
-				return true, true
-			}
-			if v, ok := e.Content.Raw["m.federate"].(bool); ok && !v {
-				// Reddit chat rooms don't federate; not a reliable signal.
-				_ = v
-			}
-			return false, true
-		}
-		return false, false
-	}
-	if v, ok := check(state); ok {
-		return v
-	}
-	if v, ok := check(timeline); ok {
-		return v
-	}
-	return false
 }
 
 const redditDMPreset = "reddit_dm"

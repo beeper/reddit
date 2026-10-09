@@ -91,6 +91,8 @@ func (*RedditClient) GetCapabilities(ctx context.Context, portal *bridgev2.Porta
 		Reply:               event.CapLevelFullySupported,
 		Edit:                event.CapLevelFullySupported,
 		EditMaxAge:          ptr.Ptr(jsontime.S(60 * time.Minute)),
+		DeleteChat:          true,
+		MessageRequest:      &event.MessageRequestFeatures{AcceptWithButton: event.CapLevelFullySupported, AcceptWithMessage: event.CapLevelPartialSupport},
 		Delete:              event.CapLevelFullySupported,
 		DeleteMaxAge:        ptr.Ptr(jsontime.S(60 * time.Minute)),
 		Reaction:            event.CapLevelFullySupported,

@@ -29,7 +29,7 @@ func (r *RedditClient) ResolveIdentifier(ctx context.Context, identifier string,
 	if identifier == "" {
 		return nil, errors.New("empty identifier")
 	}
-	results, err := r.rc.SearchUsers(ctx, identifier)
+	results, err := r.remote().SearchUsers(ctx, identifier)
 	if err != nil {
 		return nil, fmt.Errorf("search users: %w", err)
 	}
@@ -37,13 +37,11 @@ func (r *RedditClient) ResolveIdentifier(ctx context.Context, identifier string,
 	for _, hit := range results.Results {
 		display := hit.DisplayName
 		if strings.EqualFold(stripUserPrefix(display), identifier) || strings.EqualFold(string(hit.UserID), "@"+identifier+":reddit.com") {
+			if match != nil && match.UserID != hit.UserID {
+				return nil, fmt.Errorf("multiple Reddit users matched %q", identifier)
+			}
 			match = &userDirectoryHit{UserID: hit.UserID, Name: display, Avatar: string(hit.AvatarURL)}
-			break
 		}
-	}
-	if match == nil && len(results.Results) > 0 {
-		first := results.Results[0]
-		match = &userDirectoryHit{UserID: first.UserID, Name: first.DisplayName, Avatar: string(first.AvatarURL)}
 	}
 	if match == nil {
 		return nil, fmt.Errorf("no Reddit user matched %q", identifier)
@@ -62,7 +60,7 @@ func (r *RedditClient) ResolveIdentifier(ctx context.Context, identifier string,
 	if !createChat {
 		return resp, nil
 	}
-	roomID, _, err := r.rc.CreateOrGetDM(ctx, match.UserID)
+	roomID, _, err := r.remote().CreateOrGetDM(ctx, match.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("create dm: %w", err)
 	}
@@ -79,7 +77,7 @@ func (r *RedditClient) ResolveIdentifier(ctx context.Context, identifier string,
 // SearchUsers returns multiple matches for a query.
 func (r *RedditClient) SearchUsers(ctx context.Context, query string) ([]*bridgev2.ResolveIdentifierResponse, error) {
 	query = strings.TrimSpace(query)
-	results, err := r.rc.SearchUsers(ctx, query)
+	results, err := r.remote().SearchUsers(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +111,7 @@ func (r *RedditClient) CreateGroup(ctx context.Context, params *bridgev2.GroupCr
 	for _, uid := range params.Participants {
 		mxids = append(mxids, userIDToMatrix(uid, ""))
 	}
-	roomID, err := r.rc.CreateGroup(ctx, params.Name.Name, mxids)
+	roomID, err := r.remote().CreateGroup(ctx, params.Name.Name, mxids)
 	if err != nil {
 		return nil, fmt.Errorf("create group: %w", err)
 	}
