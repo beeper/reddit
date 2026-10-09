@@ -3,11 +3,7 @@ package redditchat
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha1"
-	"encoding/base32"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,10 +14,6 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"sync"
-	"time"
-
-	"github.com/rs/zerolog"
 )
 
 const (
@@ -43,8 +35,11 @@ const (
 )
 
 var (
-	ErrCaptchaRequired            = errors.New("reddit login: captcha token provider required")
 	ErrBrowserVerificationBlocked = errors.New("reddit login: browser verification blocked")
+	ErrSessionUnavailable         = errors.New("reddit login: saved session is unavailable")
+	ErrInvalidCredentials         = errors.New("reddit login: username or password rejected")
+	ErrInvalidOTP                 = errors.New("reddit login: otp code rejected")
+	ErrSSORequired                = errors.New("reddit login: account requires SSO login")
 )
 
 type CaptchaRequest struct {
@@ -57,12 +52,6 @@ type CaptchaRequest struct {
 type CaptchaResult struct {
 	Token         string
 	ClientVersion string
-}
-
-type CaptchaTokenProvider func(ctx context.Context, req CaptchaRequest) (CaptchaResult, error)
-
-func (r CaptchaRequest) EnterpriseScriptURL() string {
-	return "https://www.google.com/recaptcha/enterprise.js?render=" + url.QueryEscape(firstNonEmpty(r.SiteKey, RedditLoginCaptchaSiteKey))
 }
 
 func (r CaptchaRequest) EnterpriseExecuteJavaScript() string {
@@ -86,42 +75,13 @@ func (r CaptchaRequest) EnterpriseExecuteJavaScript() string {
 })()`, siteKey, action)
 }
 
-type CaptchaRequiredError struct {
-	Request CaptchaRequest
-}
-
-func (e *CaptchaRequiredError) Error() string {
-	return fmt.Sprintf("reddit login: captcha token required for site_key=%s action=%s page=%s", e.Request.SiteKey, e.Request.Action, e.Request.PageURL)
-}
-
-func (e *CaptchaRequiredError) Unwrap() error {
-	return ErrCaptchaRequired
-}
-
-type RedditLoginOptions struct {
-	Username             string
-	Password             string
-	TOTPCode             string
-	TOTPSecret           string
-	CaptchaTokenProvider CaptchaTokenProvider
-	HTTPClient           *http.Client
-	UserAgent            string
-	BaseURL              string
-}
-
-type RedditLoginResult struct {
-	Session     *RedditSession
-	Credentials Credentials
-	Token       RedditChatToken
-}
-
 type RedditSession struct {
 	Client    *http.Client
 	BaseURL   string
 	UserAgent string
 	CSRFToken string
 	// ClientVersion is the X-Reddit-Client-Version sniffed from the login
-	// webview (see captchaToken). Empty until the first captcha step completes.
+	// webview. Empty until the first captcha step completes.
 	ClientVersion string
 }
 
@@ -135,68 +95,6 @@ func (s *RedditSession) clientVersion() string {
 type RedditChatToken struct {
 	Token   string `json:"token"`
 	Expires int64  `json:"expires"`
-}
-
-func LoginReddit(ctx context.Context, opts RedditLoginOptions) (*RedditLoginResult, error) {
-	if opts.Username == "" {
-		return nil, errors.New("reddit login: missing username")
-	}
-	if opts.Password == "" {
-		return nil, errors.New("reddit login: missing password")
-	}
-	session, err := NewRedditSession(opts.HTTPClient, opts.BaseURL, opts.UserAgent)
-	if err != nil {
-		return nil, err
-	}
-	loginPage, err := session.prepareLogin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if err := session.checkOIDCRequired(ctx, opts.Username, loginPage); err != nil {
-		return nil, err
-	}
-	if err := session.submitPassword(ctx, opts, loginPage); err != nil {
-		return nil, err
-	}
-	token, creds, err := CredentialsFromRedditSession(ctx, session)
-	if err != nil {
-		return nil, err
-	}
-	return &RedditLoginResult{
-		Session:     session,
-		Credentials: creds,
-		Token:       token,
-	}, nil
-}
-
-func NewFromRedditLogin(ctx context.Context, opts RedditLoginOptions) (*Client, *RedditSession, error) {
-	result, err := LoginReddit(ctx, opts)
-	if err != nil {
-		return nil, nil, err
-	}
-	client, err := New(result.Credentials)
-	if err != nil {
-		return nil, nil, err
-	}
-	return client, result.Session, nil
-}
-
-func StaticCaptchaTokenProvider(tokens ...string) CaptchaTokenProvider {
-	var mu sync.Mutex
-	var next int
-	return func(ctx context.Context, req CaptchaRequest) (CaptchaResult, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		if next >= len(tokens) {
-			return CaptchaResult{}, &CaptchaRequiredError{Request: req}
-		}
-		token := strings.TrimSpace(tokens[next])
-		next++
-		if token == "" {
-			return CaptchaResult{}, errors.New("reddit login: empty captcha token")
-		}
-		return CaptchaResult{Token: token}, nil
-	}
 }
 
 func NewRedditSession(httpClient *http.Client, baseURL, userAgent string) (*RedditSession, error) {
@@ -227,51 +125,6 @@ func NewRedditSession(httpClient *http.Client, baseURL, userAgent string) (*Redd
 	}, nil
 }
 
-func RedditSessionFromPlaywrightStorageState(path string) (*RedditSession, error) {
-	state, err := readStorageState(path)
-	if err != nil {
-		return nil, err
-	}
-	session, err := NewRedditSession(nil, "", "")
-	if err != nil {
-		return nil, err
-	}
-	u, err := url.Parse(session.BaseURL)
-	if err != nil {
-		return nil, err
-	}
-	cookies := make([]*http.Cookie, 0, len(state.Cookies))
-	now := time.Now()
-	for _, item := range state.Cookies {
-		if !strings.Contains(item.Domain, "reddit.com") {
-			continue
-		}
-		cookie := &http.Cookie{
-			Name:     item.Name,
-			Value:    item.Value,
-			Path:     item.Path,
-			Domain:   item.Domain,
-			Secure:   item.Secure,
-			HttpOnly: item.HTTPOnly,
-		}
-		if item.Expires > 0 {
-			cookie.Expires = time.Unix(int64(item.Expires), 0)
-			if cookie.Expires.Before(now) {
-				continue
-			}
-		}
-		if !validCookieValue(cookie.Value) {
-			continue
-		}
-		cookies = append(cookies, cookie)
-		if item.Name == "csrf_token" {
-			session.CSRFToken = item.Value
-		}
-	}
-	session.Client.Jar.SetCookies(u, cookies)
-	return session, nil
-}
-
 func CredentialsFromRedditSession(ctx context.Context, session *RedditSession) (RedditChatToken, Credentials, error) {
 	token, err := session.RefreshChatToken(ctx)
 	if err != nil {
@@ -289,11 +142,11 @@ func CredentialsFromRedditSession(ctx context.Context, session *RedditSession) (
 
 func (s *RedditSession) RefreshChatToken(ctx context.Context) (RedditChatToken, error) {
 	if s == nil {
-		return RedditChatToken{}, errors.New("reddit login: nil session")
+		return RedditChatToken{}, ErrSessionUnavailable
 	}
 	csrf := s.csrfToken()
 	if csrf == "" {
-		return RedditChatToken{}, errors.New("reddit login: missing csrf_token cookie")
+		return RedditChatToken{}, fmt.Errorf("%w: missing csrf_token cookie", ErrSessionUnavailable)
 	}
 	form := url.Values{"csrf_token": {csrf}}
 	req, err := s.newRequest(ctx, http.MethodPost, "/svc/shreddit/token", strings.NewReader(form.Encode()))
@@ -305,20 +158,6 @@ func (s *RedditSession) RefreshChatToken(ctx context.Context) (RedditChatToken, 
 	req.Header.Set("Referer", s.BaseURL+"/chat/")
 	req.Header.Set("X-Original-Referer", s.BaseURL+"/chat/")
 	req.Header.Set("X-Reddit-Client-Version", s.clientVersion())
-	// Diagnostic: confirm the session looks authenticated before the token POST.
-	log := zerolog.Ctx(ctx)
-	if log != nil {
-		var cookieNames []string
-		if u, perr := url.Parse(s.BaseURL); perr == nil && s.Client != nil && s.Client.Jar != nil {
-			for _, c := range s.Client.Jar.Cookies(u) {
-				cookieNames = append(cookieNames, c.Name)
-			}
-		}
-		log.Debug().
-			Bool("has_csrf", csrf != "").
-			Strs("cookie_names", cookieNames).
-			Msg("Refreshing reddit chat token")
-	}
 	var token RedditChatToken
 	if err := s.doJSON(req, &token); err != nil {
 		return RedditChatToken{}, err
@@ -342,7 +181,7 @@ func (s *RedditSession) prepareLogin(ctx context.Context) (string, error) {
 		return "", redditStatusError(resp, body)
 	}
 	text := string(body)
-	if strings.Contains(text, "Please wait for verification") {
+	if strings.Contains(text, "Please wait for verification") || findFirst(text, `name=["'](js_challenge)["']`) != "" {
 		nextPath, err := solveJSChallenge(text)
 		if err != nil {
 			return "", err
@@ -377,7 +216,7 @@ func (s *RedditSession) prepareLogin(ctx context.Context) (string, error) {
 	return text, nil
 }
 
-func (s *RedditSession) checkOIDCRequired(ctx context.Context, username, loginPage string) error {
+func (s *RedditSession) checkOIDCRequired(ctx context.Context, username string) error {
 	body, err := json.Marshal(map[string]string{
 		"userIdentifier": username,
 		"csrf_token":     s.csrfToken(),
@@ -399,87 +238,70 @@ func (s *RedditSession) checkOIDCRequired(ctx context.Context, username, loginPa
 		return err
 	}
 	if resp.IsSSO {
-		return errors.New("reddit login: account requires SSO login")
+		return ErrSSORequired
 	}
 	return nil
 }
 
-func (s *RedditSession) submitPassword(ctx context.Context, opts RedditLoginOptions, loginPage string) error {
-	captcha, err := opts.captchaToken(ctx, s.BaseURL, CaptchaStepPassword)
-	if err != nil {
+// PrepareLogin initializes the session once; subsequent CAPTCHA and OTP steps
+// continue with the same cookies and CSRF token.
+func (s *RedditSession) PrepareLogin(ctx context.Context, username string) error {
+	if _, err := s.prepareLogin(ctx); err != nil {
 		return err
 	}
+	return s.checkOIDCRequired(ctx, username)
+}
+
+func (s *RedditSession) CaptchaRequest(step CaptchaStep) CaptchaRequest {
+	return CaptchaRequest{SiteKey: RedditLoginCaptchaSiteKey, Action: RedditLoginCaptchaAction,
+		PageURL: s.BaseURL + "/login/", Step: step}
+}
+
+func (s *RedditSession) loginForm(username, password string, captcha CaptchaResult) url.Values {
 	if captcha.ClientVersion != "" {
 		s.ClientVersion = captcha.ClientVersion
 	}
-	form := url.Values{
-		"username":               {opts.Username},
-		"password":               {opts.Password},
-		"recaptcha_token":        {captcha.Token},
-		"recaptcha_use_checkbox": {"false"},
-		"recaptcha_action":       {RedditLoginCaptchaAction},
-		"csrf_token":             {s.csrfToken()},
+	return url.Values{
+		"username": {username}, "password": {password},
+		"recaptcha_token": {captcha.Token}, "recaptcha_use_checkbox": {"false"},
+		"recaptcha_action": {RedditLoginCaptchaAction}, "csrf_token": {s.csrfToken()},
 	}
-	resp, body, err := s.postLoginForm(ctx, "/svc/shreddit/account/login", form)
+}
+
+// SubmitPassword reports whether Reddit requires an OTP. It does not restart
+// authentication or wait for user input: bridgev2 owns the intervening steps.
+func (s *RedditSession) SubmitPassword(ctx context.Context, username, password string, captcha CaptchaResult) (needsOTP bool, err error) {
+	resp, body, err := s.postLoginForm(ctx, "/svc/shreddit/account/login", s.loginForm(username, password, captcha))
+	if err != nil {
+		return false, err
+	}
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return false, checkLoginResponseBody(body, ErrInvalidCredentials)
+	case http.StatusAccepted:
+		return true, nil
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
+		return false, fmt.Errorf("%w: %w", ErrInvalidCredentials, redditStatusError(resp, body))
+	default:
+		return false, redditStatusError(resp, body)
+	}
+}
+
+func (s *RedditSession) SubmitOTP(ctx context.Context, username, password, otp string, captcha CaptchaResult) error {
+	form := s.loginForm(username, password, captcha)
+	form.Set("appOtp", otp)
+	resp, body, err := s.postLoginForm(ctx, "/svc/shreddit/account/login/otp", form)
 	if err != nil {
 		return err
 	}
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return checkLoginResponseBody(ctx, body)
-	case http.StatusAccepted:
-		otp, err := opts.otpCode(time.Now())
-		if err != nil {
-			return err
-		}
-		captcha, err = opts.captchaToken(ctx, s.BaseURL, CaptchaStepOTP)
-		if err != nil {
-			return err
-		}
-		if captcha.ClientVersion != "" {
-			s.ClientVersion = captcha.ClientVersion
-		}
-		form := url.Values{
-			"appOtp":                 {otp},
-			"recaptcha_token":        {captcha.Token},
-			"recaptcha_use_checkbox": {"false"},
-			"recaptcha_action":       {RedditLoginCaptchaAction},
-			"username":               {opts.Username},
-			"password":               {opts.Password},
-			"csrf_token":             {s.csrfToken()},
-		}
-		resp, body, err := s.postLoginForm(ctx, "/svc/shreddit/account/login/otp", form)
-		if err != nil {
-			return err
-		}
-		if resp.StatusCode != http.StatusOK {
-			return redditStatusError(resp, body)
-		}
-		return nil
+		return checkLoginResponseBody(body, ErrInvalidOTP)
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
+		return fmt.Errorf("%w: %w", ErrInvalidOTP, redditStatusError(resp, body))
 	default:
 		return redditStatusError(resp, body)
 	}
-}
-
-func (opts RedditLoginOptions) captchaToken(ctx context.Context, baseURL string, step CaptchaStep) (CaptchaResult, error) {
-	req := CaptchaRequest{
-		SiteKey: RedditLoginCaptchaSiteKey,
-		Action:  RedditLoginCaptchaAction,
-		PageURL: strings.TrimRight(firstNonEmpty(baseURL, DefaultRedditURL), "/") + "/login/",
-		Step:    step,
-	}
-	if opts.CaptchaTokenProvider == nil {
-		return CaptchaResult{}, &CaptchaRequiredError{Request: req}
-	}
-	result, err := opts.CaptchaTokenProvider(ctx, req)
-	if err != nil {
-		return CaptchaResult{}, err
-	}
-	result.Token = strings.TrimSpace(result.Token)
-	if result.Token == "" {
-		return CaptchaResult{}, errors.New("reddit login: empty captcha token")
-	}
-	return result, nil
 }
 
 func (s *RedditSession) postLoginForm(ctx context.Context, path string, form url.Values) (*http.Response, []byte, error) {
@@ -535,7 +357,7 @@ func (s *RedditSession) doJSON(req *http.Request, out any) error {
 		return redditStatusError(resp, body)
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("reddit login: decode %s: %w", req.URL.String(), err)
+		return fmt.Errorf("reddit login: decode response: %w", err)
 	}
 	return nil
 }
@@ -570,54 +392,14 @@ func (s *RedditSession) csrfToken() string {
 	return ""
 }
 
-func (opts RedditLoginOptions) otpCode(now time.Time) (string, error) {
-	if opts.TOTPCode != "" {
-		return opts.TOTPCode, nil
-	}
-	if opts.TOTPSecret == "" {
-		return "", errors.New("reddit login: otp required; provide TOTPCode or TOTPSecret")
-	}
-	return GenerateTOTP(opts.TOTPSecret, now)
-}
-
-func GenerateTOTP(secret string, now time.Time) (string, error) {
-	key, err := decodeBase32Secret(secret)
-	if err != nil {
-		return "", err
-	}
-	counter := uint64(now.Unix() / 30)
-	var msg [8]byte
-	binary.BigEndian.PutUint64(msg[:], counter)
-	sum := hmac.New(sha1.New, key)
-	_, _ = sum.Write(msg[:])
-	hash := sum.Sum(nil)
-	offset := hash[len(hash)-1] & 0x0f
-	code := (int(hash[offset])&0x7f)<<24 |
-		(int(hash[offset+1])&0xff)<<16 |
-		(int(hash[offset+2])&0xff)<<8 |
-		(int(hash[offset+3]) & 0xff)
-	return fmt.Sprintf("%06d", code%1000000), nil
-}
-
-func decodeBase32Secret(secret string) ([]byte, error) {
-	cleaned := strings.ToUpper(strings.TrimSpace(secret))
-	cleaned = strings.TrimRight(cleaned, "=")
-	if cleaned == "" {
-		return nil, errors.New("reddit login: empty TOTP secret")
-	}
-	if rem := len(cleaned) % 8; rem != 0 {
-		cleaned += strings.Repeat("=", 8-rem)
-	}
-	key, err := base32.StdEncoding.DecodeString(cleaned)
-	if err != nil {
-		return nil, fmt.Errorf("reddit login: decode TOTP secret: %w", err)
-	}
-	return key, nil
-}
-
 func solveJSChallenge(text string) (string, error) {
 	seed := findFirst(text, `await\(async e=>e\+e\)\("([^"]+)"\)`)
-	token := findFirst(text, `name="token" value="([^"]+)"`)
+	tokenName := "jsc_token"
+	token := findFirst(text, `name="jsc_token" value="([^"]+)"`)
+	if token == "" {
+		tokenName = "token"
+		token = findFirst(text, `name="token" value="([^"]+)"`)
+	}
 	action := findFirst(text, `<form[^>]+action="([^"]+)"`)
 	if seed == "" || token == "" {
 		return "", errors.New("reddit login: javascript verification challenge not found")
@@ -628,7 +410,7 @@ func solveJSChallenge(text string) (string, error) {
 	values := url.Values{
 		"solution":     {seed + seed},
 		"js_challenge": {"1"},
-		"token":        {token},
+		tokenName:      {token},
 		"jsc_orig_r":   {findFirst(text, `name="jsc_orig_r" value="([^"]*)"`)},
 	}
 	return action + "?" + values.Encode(), nil
@@ -697,17 +479,7 @@ func matrixWhoamiDevice(ctx context.Context, httpClient *http.Client, token stri
 	return whoami.DeviceID, nil
 }
 
-func checkLoginResponseBody(ctx context.Context, body []byte) error {
-	if log := zerolog.Ctx(ctx); log != nil {
-		preview := strings.TrimSpace(string(body))
-		if len(preview) > 300 {
-			preview = preview[:300]
-		}
-		log.Debug().
-			Int("body_len", len(body)).
-			Str("body_preview", preview).
-			Msg("Reddit password step returned 200")
-	}
+func checkLoginResponseBody(body []byte, rejected error) error {
 	var parsed struct {
 		Success *bool           `json:"success"`
 		Error   json.RawMessage `json:"error"`
@@ -721,33 +493,37 @@ func checkLoginResponseBody(ctx context.Context, body []byte) error {
 		(len(parsed.Error) > 0 && string(parsed.Error) != "null") ||
 		(len(parsed.Reason) > 0 && string(parsed.Reason) != "null")
 	if failed {
-		msg := strings.TrimSpace(string(body))
-		if len(msg) > 500 {
-			msg = msg[:500]
-		}
-		return fmt.Errorf("reddit login: password step rejected: %s", msg)
+		return rejected
 	}
 	return nil
 }
 
+type LoginHTTPError struct {
+	Operation  string
+	StatusCode int
+}
+
+func (e *LoginHTTPError) Error() string {
+	return fmt.Sprintf("reddit login: %s request failed: status=%d", e.Operation, e.StatusCode)
+}
+
 func redditStatusError(resp *http.Response, body []byte) error {
-	msg := strings.TrimSpace(string(body))
-	if len(msg) > 500 {
-		msg = msg[:500]
-	}
-	if msg == "" {
-		msg = resp.Status
-	}
-	contentType := resp.Header.Get("Content-Type")
-	location := resp.Header.Get("Location")
-	extra := ""
-	for _, h := range []string{"Cf-Ray", "Cf-Mitigated", "X-Ratelimit-Remaining"} {
-		if v := resp.Header.Get(h); v != "" {
-			extra += fmt.Sprintf(" %s=%q", strings.ToLower(h), v)
+	// Authentication responses, redirect URLs and headers may contain session material.
+	// Keep errors safe to forward to bridge logs and client login notices.
+	operation := "sign-in"
+	if resp.Request != nil && resp.Request.URL != nil {
+		switch resp.Request.URL.Path {
+		case "/svc/shreddit/account/login/otp":
+			operation = "two-factor verification"
+		case "/svc/shreddit/token":
+			operation = "chat session"
+		case "/svc/shreddit/account/login/check_is_oidc_required":
+			operation = "account lookup"
+		case "/svc/shreddit/update-recaptcha":
+			operation = "verification setup"
 		}
 	}
-	return fmt.Errorf("reddit login: %s %s failed: status=%d content-type=%q location=%q%s body=%s",
-		resp.Request.Method, resp.Request.URL.String(), resp.StatusCode, contentType, location, extra, msg)
+	return &LoginHTTPError{Operation: operation, StatusCode: resp.StatusCode}
 }
 
 func findFirst(text string, patterns ...string) string {
@@ -759,14 +535,4 @@ func findFirst(text string, patterns ...string) string {
 		}
 	}
 	return ""
-}
-
-func validCookieValue(value string) bool {
-	for i := 0; i < len(value); i++ {
-		c := value[i]
-		if c < 0x21 || c == '"' || c == ';' || c == '\\' || c == 0x7f {
-			return false
-		}
-	}
-	return true
 }

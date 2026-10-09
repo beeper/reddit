@@ -3,6 +3,8 @@ package connector
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"maunium.net/go/mautrix/bridgev2"
@@ -12,14 +14,18 @@ import (
 )
 
 type RedditConnector struct {
-	Bridge *bridgev2.Bridge
-	Config Config
+	Bridge           *bridgev2.Bridge
+	Config           Config
+	mediaUploadLimit atomic.Int64
+	emojiMu          sync.Mutex
+	directMedia      bool
 }
 
 var (
 	_ bridgev2.NetworkConnector               = (*RedditConnector)(nil)
 	_ bridgev2.ConfigValidatingNetwork        = (*RedditConnector)(nil)
 	_ bridgev2.TransactionIDGeneratingNetwork = (*RedditConnector)(nil)
+	_ bridgev2.MaxFileSizeingNetwork          = (*RedditConnector)(nil)
 )
 
 func (rc *RedditConnector) Init(bridge *bridgev2.Bridge) {
@@ -42,8 +48,10 @@ func (rc *RedditConnector) GetName() bridgev2.BridgeName {
 }
 
 func (rc *RedditConnector) GetBridgeInfoVersion() (info, capabilities int) {
-	return 1, 1
+	return 3, 9
 }
+
+func (rc *RedditConnector) SetMaxFileSize(size int64) { rc.mediaUploadLimit.Store(size) }
 
 func (rc *RedditConnector) GenerateTransactionID(userID id.UserID, roomID id.RoomID, eventType event.Type) networkid.RawTransactionID {
 	return networkid.RawTransactionID(uuid.NewString())

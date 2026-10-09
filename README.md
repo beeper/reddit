@@ -13,6 +13,24 @@ require bridge updates.
 - Text and media send and receive.
 - Replies, edits, reactions, read receipts, and typing notifications.
 
+## Configuration
+
+Direct media uses the standard top-level `direct_media` configuration: enable
+it with a reachable media server name/delegation and a persistent server signing
+key. Keep that name and key stable so existing signed URLs remain usable. The
+bridge must retain the originating Reddit login and Reddit must still serve the
+file. Downloads use bounded memory and sniff the actual image MIME type; they
+are proxied on demand, without a second media cache or an upload to Matrix.
+Reddit can transcode WebP to JPEG, so native event metadata may differ from the
+bytes served by the proxy. Existing reuploaded messages are unchanged.
+
+Ordinary Matrix leave events also require `bridge.bridge_matrix_leave: true`;
+Beeper membership state requests require `bridge.enable_send_state_requests: true`.
+The existing Delete/Ignore action remains available independently of
+the Matrix-leave switch. DMs are hidden for the owner, while groups are left.
+Group invite/kick capabilities remain rejected in DMs; Reddit enforces group
+permissions and invitation limits. Ban/unban and role changes are unsupported.
+
 ## Setup
 
 Install and log in to [`bbctl`](https://github.com/beeper/bridge-manager):
@@ -21,19 +39,41 @@ Install and log in to [`bbctl`](https://github.com/beeper/bridge-manager):
 bbctl login
 ```
 
-Register the bridge and generate its config:
+Build in the source checkout (Go 1.26+ and libolm are required):
 
 ```sh
-bbctl config --type bridgev2 -o config.yaml sh-reddit
-bbctl register -g -o registration.yaml sh-reddit
+./build.sh
 ```
 
-Run the bridge (requires Go 1.26+ and libolm — `brew install libolm` on
-macOS, `apt-get install libolm-dev` on Debian/Ubuntu):
+Install libolm with `brew install libolm` on macOS or
+`apt-get install libolm-dev` on Debian/Ubuntu.
+Generate credentials in a private runtime directory outside the source
+checkout. Use a dedicated bridge name for the first registration:
 
 ```sh
-go run ./cmd/reddit -c config.yaml -r registration.yaml
+install -d -m 700 "$HOME/.local/share/beeper-reddit"
+cd "$HOME/.local/share/beeper-reddit"
+umask 077
+bbctl config --type bridgev2 --param pickle_key=generate -o "$PWD/config.yaml" sh-reddit
+bbctl register -g -o "$PWD/registration.yaml" sh-reddit
 ```
+
+Enable Beeper's state-request path in `config.yaml` so group-name changes can
+reach the connector. Set this field under the `bridge` section:
+
+```yaml
+bridge:
+    enable_send_state_requests: true
+```
+
+Then start the bridge:
+
+```sh
+/absolute/path/to/reddit/reddit -c config.yaml -r registration.yaml
+```
+
+For updates, stop the bridge process and replace its binary while retaining
+the same runtime, registration, database and encryption key.
 
 Then open Beeper Desktop, go to Settings -> Bridges -> Self-hosted Bridges,
 find `sh-reddit`, add an account, and complete the Reddit login flow.

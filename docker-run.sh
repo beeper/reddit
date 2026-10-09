@@ -1,20 +1,30 @@
 #!/bin/sh
+set -eu
+umask 077
 
-if [[ -z "$GID" ]]; then
-	GID="$UID"
+bridge_uid="${UID:-1337}"
+bridge_gid="${GID:-$bridge_uid}"
+case "$bridge_uid:$bridge_gid" in
+	*[!0-9:]*|:*|*:) echo "UID and GID must be numeric" >&2; exit 1 ;;
+esac
+
+mkdir -p /data
+chmod 700 /data
+cd /data
+
+# Generate and upgrade files as the same numeric user that runs the bridge.
+# The previous launcher wrote the initial 0600 config as root, preventing the
+# host user from editing it even when UID/GID were explicitly supplied.
+if [ "$(id -u)" = 0 ] && [ "$bridge_uid" != 0 ]; then
+	chown -R "$bridge_uid:$bridge_gid" /data
+	exec su-exec "$bridge_uid:$bridge_gid" "$0" "$@"
 fi
 
-# Define functions.
-function fixperms {
-	chown -R $UID:$GID /data
+if [ "$#" -gt 0 ]; then
+	exec /usr/bin/reddit "$@"
+fi
 
-	# /opt/reddit is read-only, so disable file logging if it's pointing there.
-	if [[ "$(yq e '.logging.writers[1].filename' /data/config.yaml)" == "./logs/reddit.log" ]]; then
-		yq -I4 e -i 'del(.logging.writers[1])' /data/config.yaml
-	fi
-}
-
-if [[ ! -f /data/config.yaml ]]; then
+if [ ! -f /data/config.yaml ]; then
 	/usr/bin/reddit -c /data/config.yaml -e
 	echo "Didn't find a config file."
 	echo "Copied default config file to /data/config.yaml"
@@ -23,7 +33,7 @@ if [[ ! -f /data/config.yaml ]]; then
 	exit
 fi
 
-if [[ ! -f /data/registration.yaml ]]; then
+if [ ! -f /data/registration.yaml ]; then
 	/usr/bin/reddit -g -c /data/config.yaml -r /data/registration.yaml || exit $?
 	echo "Didn't find a registration file."
 	echo "Generated one for you."
@@ -31,6 +41,5 @@ if [[ ! -f /data/registration.yaml ]]; then
 	exit
 fi
 
-cd /data
-fixperms
-exec su-exec $UID:$GID /usr/bin/reddit
+chmod 600 /data/config.yaml /data/registration.yaml
+exec /usr/bin/reddit -c /data/config.yaml -r /data/registration.yaml
