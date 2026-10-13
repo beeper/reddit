@@ -11,7 +11,7 @@ require bridge updates.
 - Reddit login through Beeper Desktop (username/password, app-based 2FA).
 - Direct messages and group chats, including starting new ones from Beeper.
 - Text and media send and receive.
-- Replies, edits, reactions, read receipts, and typing notifications.
+- Replies, reactions, read receipts, and typing notifications.
 
 ## Configuration
 
