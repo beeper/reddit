@@ -12,6 +12,7 @@ require bridge updates.
 - Direct messages and group chats, including starting new ones from Beeper.
 - Text and media send and receive.
 - Replies, reactions, read receipts, and typing notifications.
+- Block and unblock users from DMs, with Reddit block-list synchronization.
 
 ## Configuration
 
@@ -30,6 +31,11 @@ The existing Delete/Ignore action remains available independently of
 the Matrix-leave switch. DMs are hidden for the owner, while groups are left.
 Group invite/kick capabilities remain rejected in DMs; Reddit enforces group
 permissions and invitation limits. Ban/unban and role changes are unsupported.
+
+Blocking from a DM applies to the Reddit account, including posts and comments.
+It requires a saved Reddit login session. Changes made in Reddit are checked on
+connect and approximately once per minute while chat sync is running. Blocking
+does not leave shared groups. Reporting spam alongside blocking is unsupported.
 
 ## Setup
 
@@ -127,3 +133,4 @@ pkg/redditchat/    Reddit chat client library
 | New DMs and groups | ✅ | ✅ Username search |
 | Message requests | ✅ | ✅ Accept or ignore |
 | Conversation deletion | ✅ Hidden and left chats | ✅ Hides DMs, leaves groups |
+| User blocking | ✅ Polled block list | ✅ Block/unblock from DMs |

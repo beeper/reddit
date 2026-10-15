@@ -69,9 +69,9 @@ var stateCaps = event.StateFeatureMap{
 	event.StateRoomName.Type: {Level: event.CapLevelFullySupported},
 }
 
-func (*RedditClient) GetCapabilities(ctx context.Context, portal *bridgev2.Portal) *event.RoomFeatures {
+func (r *RedditClient) GetCapabilities(ctx context.Context, portal *bridgev2.Portal) *event.RoomFeatures {
 	caps := (&event.RoomFeatures{
-		ID:                   "com.beeper.reddit.capabilities.v10",
+		ID:                   "com.beeper.reddit.capabilities.v11",
 		File:                 fileCaps,
 		MaxTextLength:        MaxTextLength,
 		LocationMessage:      event.CapLevelDropped,
@@ -98,6 +98,10 @@ func (*RedditClient) GetCapabilities(ctx context.Context, portal *bridgev2.Porta
 	}).Clone()
 	if portal != nil && portal.RoomType == database.RoomTypeDM {
 		caps.ID += ".dm"
+		if r.session != nil {
+			caps.ID += ".blocking"
+			caps.BlockUser = true
+		}
 		caps.State[event.StateRoomName.Type].Level = event.CapLevelRejected
 		caps.MemberActions[event.MemberActionInvite] = event.CapLevelRejected
 		caps.MemberActions[event.MemberActionKick] = event.CapLevelRejected

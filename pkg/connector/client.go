@@ -39,6 +39,9 @@ type RedditClient struct {
 	roomMu sync.RWMutex
 	rooms  map[id.RoomID]*RoomState
 
+	blockMu      sync.Mutex
+	blockedUsers map[networkid.UserID]bool
+
 	typingMu sync.Mutex
 	typing   map[networkid.PortalKey][]id.UserID
 }

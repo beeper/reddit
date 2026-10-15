@@ -385,7 +385,6 @@ func (s *RedditSession) csrfToken() string {
 	}
 	for _, cookie := range s.Client.Jar.Cookies(u) {
 		if cookie.Name == "csrf_token" {
-			s.CSRFToken = cookie.Value
 			return cookie.Value
 		}
 	}
