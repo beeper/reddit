@@ -29,6 +29,7 @@ type UserLoginMetadata struct {
 	Credentials      redditchat.Credentials `json:"credentials"`
 	CookiesJSON      string                 `json:"cookies_json,omitempty"`
 	ChatTokenExpiry  int64                  `json:"chat_token_expiry,omitempty"`
+	PushDeviceID     string                 `json:"push_device_id,omitempty"`
 	NextBatch        string                 `json:"next_batch,omitempty"`
 	Username         string                 `json:"username,omitempty"`
 	RoomStateVersion int                    `json:"room_state_version,omitempty"`

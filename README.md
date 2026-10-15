@@ -31,6 +31,12 @@ the Matrix-leave switch. DMs are hidden for the owner, while groups are left.
 Group invite/kick capabilities remain rejected in DMs; Reddit enforces group
 permissions and invitation limits. Ban/unban and role changes are unsupported.
 
+FCM push registration is implemented for wrappers that provide a Reddit-project
+token. Reddit's Android registration has no chat-only filter: unrelated Reddit
+notifications may also wake the wrapper. Account notification settings are not
+changed. Real FCM delivery and token health acknowledgements remain unverified;
+see the [protocol findings](pkg/redditchat/README.md#push-registration).
+
 ## Setup
 
 Install and log in to [`bbctl`](https://github.com/beeper/bridge-manager):
