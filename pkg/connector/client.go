@@ -39,6 +39,13 @@ type RedditClient struct {
 	roomMu sync.RWMutex
 	rooms  map[id.RoomID]*RoomState
 
+	// blockNetMu serializes block-list requests so a refresh snapshot cannot
+	// overwrite a newer mutation. blockMu guards only blockedUsers and is never
+	// held across I/O, since chat info reads it on the sync path.
+	blockNetMu   sync.Mutex
+	blockMu      sync.Mutex
+	blockedUsers map[networkid.UserID]bool
+
 	typingMu sync.Mutex
 	typing   map[networkid.PortalKey][]id.UserID
 }
