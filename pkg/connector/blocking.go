@@ -25,16 +25,18 @@ func (r *RedditClient) HandleMatrixBlockUser(ctx context.Context, msg *bridgev2.
 	}
 	// Serialize native snapshots with mutations so an older response cannot
 	// overwrite the new state in the account's in-memory block list.
-	r.blockMu.Lock()
-	defer r.blockMu.Unlock()
+	r.blockNetMu.Lock()
+	defer r.blockNetMu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if err := r.session.SetUserBlocked(ctx, string(userID), msg.Content.Block); err != nil {
 		return err
 	}
+	r.blockMu.Lock()
 	if r.blockedUsers != nil {
 		r.blockedUsers[userID] = msg.Content.Block
 	}
+	r.blockMu.Unlock()
 	// bridgev2 updates and persists this portal only after this call succeeds.
 	return nil
 }
@@ -50,18 +52,21 @@ func (r *RedditClient) userBlocked(userID networkid.UserID) *bool {
 }
 
 func (r *RedditClient) refreshBlockedUsers(ctx context.Context) ([]string, error) {
-	r.blockMu.Lock()
-	defer r.blockMu.Unlock()
+	r.blockNetMu.Lock()
+	defer r.blockNetMu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	users, err := r.session.GetBlockedUsers(ctx)
 	if err != nil {
 		return nil, err
 	}
-	r.blockedUsers = make(map[networkid.UserID]bool, len(users))
+	blocked := make(map[networkid.UserID]bool, len(users))
 	for _, user := range users {
-		r.blockedUsers[networkid.UserID(user)] = true
+		blocked[networkid.UserID(user)] = true
 	}
+	r.blockMu.Lock()
+	r.blockedUsers = blocked
+	r.blockMu.Unlock()
 	return users, nil
 }
 
