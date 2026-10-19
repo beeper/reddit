@@ -26,10 +26,12 @@ type RedditClient struct {
 	userLogin *bridgev2.UserLogin
 	userID    networkid.UserID
 
-	rc       *redditchat.Client
-	clientMu sync.RWMutex
-	session  *redditchat.RedditSession
-	meta     *UserLoginMetadata
+	rc        *redditchat.Client
+	clientMu  sync.RWMutex
+	session   *redditchat.RedditSession
+	meta      *UserLoginMetadata
+	refreshMu sync.Mutex
+	pushMu    sync.Mutex
 
 	syncMu     sync.Mutex
 	syncCancel context.CancelFunc
@@ -167,8 +169,10 @@ func (r *RedditClient) saveMeta(ctx context.Context) error {
 var errRefreshAccountMismatch = errors.New("reddit session belongs to a different account; sign in again with the original account")
 
 // refreshChatToken re-mints the Reddit Matrix access token using the saved
-// Reddit session cookies. Called on 401 from the Matrix homeserver.
+// Reddit session cookies when chat or push registration needs fresh credentials.
 func (r *RedditClient) refreshChatToken(ctx context.Context) error {
+	r.refreshMu.Lock()
+	defer r.refreshMu.Unlock()
 	if r.session == nil {
 		return redditchat.ErrSessionUnavailable
 	}
