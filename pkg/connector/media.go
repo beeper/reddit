@@ -60,7 +60,7 @@ func mediaSendStatus(err error) error {
 	}
 	status := bridgev2.WrapErrorInStatus(err).WithIsCertain(true).WithErrorReason(event.MessageStatusNetworkError).WithMessage("failed to upload image")
 	if isUnbridgeable(err) {
-		return status.WithStatus(event.MessageStatusFail)
+		return status.WithErrorReason(event.MessageStatusGenericError).WithStatus(event.MessageStatusFail)
 	}
 	return status
 }

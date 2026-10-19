@@ -56,7 +56,7 @@ func wrapRedditError(err error) error {
 	case redditFailureForbidden:
 		return status.WithIsCertain(true).WithErrorReason(event.MessageStatusNoPermission).WithStatus(event.MessageStatusFail).WithMessage("reddit doesn't allow this")
 	case redditFailureRejected:
-		return status.WithIsCertain(true).WithErrorReason(event.MessageStatusNetworkError).WithStatus(event.MessageStatusFail).WithMessage("reddit rejected this request")
+		return status.WithIsCertain(true).WithErrorReason(event.MessageStatusGenericError).WithStatus(event.MessageStatusFail).WithMessage("reddit rejected this request")
 	default:
 		return status.WithIsCertain(false).WithErrorReason(event.MessageStatusNetworkError).WithMessage("couldn't reach reddit")
 	}
