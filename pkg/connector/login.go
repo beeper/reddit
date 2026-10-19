@@ -3,12 +3,12 @@ package connector
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 
+	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/status"
@@ -134,7 +134,7 @@ func (p *PasswordLogin) SubmitUserInput(ctx context.Context, input map[string]st
 		}
 		return p.buildCaptchaStep(p.session.CaptchaRequest(redditchat.CaptchaStepOTP)), nil
 	default:
-		return nil, errors.New("reddit login is not waiting for user input")
+		return nil, bridgev2.RespError(mautrix.MBadState.WithMessage("Reddit login is not waiting for input.").WithStatus(http.StatusBadRequest))
 	}
 }
 
@@ -145,7 +145,7 @@ func (p *PasswordLogin) SubmitCookies(ctx context.Context, cookies map[string]st
 		return nil, err
 	}
 	if p.step != StepIDCaptchaPassword && p.step != StepIDCaptchaOTP {
-		return nil, errors.New("reddit login is not waiting for verification")
+		return nil, bridgev2.RespError(mautrix.MBadState.WithMessage("Reddit login is not waiting for verification.").WithStatus(http.StatusBadRequest))
 	}
 	captcha := redditchat.CaptchaResult{
 		Token:         strings.TrimSpace(cookies[FieldRecaptchaToken]),
