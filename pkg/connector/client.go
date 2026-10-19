@@ -142,6 +142,8 @@ func (r *RedditClient) IsThisUser(ctx context.Context, userID networkid.UserID) 
 }
 
 func (r *RedditClient) LogoutRemote(ctx context.Context) {
+	// Stop syncing first so a 401 after logout can't refresh the token again.
+	r.Disconnect()
 	if !r.IsLoggedIn() {
 		return
 	}
