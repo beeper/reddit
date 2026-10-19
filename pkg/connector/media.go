@@ -53,6 +53,18 @@ func mediaError(ctx context.Context, operation string, err error) error {
 	return safe
 }
 
+// The message is never sent when its media fails, so the failure is certain.
+func mediaSendStatus(err error) error {
+	if errors.As(err, new(bridgev2.MessageStatus)) {
+		return err
+	}
+	status := bridgev2.WrapErrorInStatus(err).WithIsCertain(true).WithErrorReason(event.MessageStatusNetworkError).WithMessage("failed to upload image")
+	if isUnbridgeable(err) {
+		return status.WithStatus(event.MessageStatusFail)
+	}
+	return status
+}
+
 func copyMediaInfo(content *event.MessageEventContent) {
 	if content.Info == nil {
 		content.Info = &event.FileInfo{}

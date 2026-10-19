@@ -3,7 +3,6 @@ package connector
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"maunium.net/go/mautrix"
@@ -24,7 +23,7 @@ var (
 
 func (r *RedditClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.MatrixMessage) (*bridgev2.MatrixMessageResponse, error) {
 	if !r.IsLoggedIn() {
-		return nil, errors.New("not logged in to Reddit")
+		return nil, bridgev2.ErrNotLoggedIn
 	}
 	txn, err := r.outgoingTransaction(msg.Portal, msg.Event, msg.InputTransactionID)
 	if err != nil {
@@ -44,7 +43,7 @@ func (r *RedditClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Ma
 	switch content.MsgType {
 	case event.MsgImage:
 		if err = r.sendMedia(ctx, content); err != nil {
-			return nil, err
+			return nil, mediaSendStatus(err)
 		}
 	case event.MsgText, event.MsgNotice, event.MsgEmote:
 	default:
@@ -52,7 +51,7 @@ func (r *RedditClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Ma
 	}
 	resp, err := r.remote().SendMessage(ctx, portalIDToRoomID(msg.Portal.ID), content, mautrix.ReqSendEvent{TransactionID: txn})
 	if err != nil {
-		return nil, fmt.Errorf("send to reddit: %w", err)
+		return nil, wrapRedditError(err)
 	}
 	if resp.EventID == "" {
 		return nil, errors.New("reddit returned no message identity")
@@ -89,7 +88,7 @@ func (r *RedditClient) HandleMatrixMessageRemove(ctx context.Context, msg *bridg
 		reason = msg.Content.Reason
 	}
 	_, err = r.matrix().RedactEvent(ctx, roomID, target, mautrix.ReqRedact{Reason: reason, TxnID: txn})
-	return err
+	return wrapRedditError(err)
 }
 
 func (r *RedditClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev2.MatrixReaction) (bridgev2.MatrixReactionPreResponse, error) {
@@ -118,13 +117,13 @@ func (r *RedditClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.M
 		return nil, err
 	}
 	if msg.PreHandleResp == nil || msg.PreHandleResp.EmojiID == "" {
-		return nil, errors.New("reaction has no emoji")
+		return nil, permanentFailure(event.MessageStatusUnsupported, "reaction has no emoji")
 	}
 	roomID := portalIDToRoomID(msg.Portal.ID)
 	emoji := string(msg.PreHandleResp.EmojiID)
 	resp, err := r.matrix().SendMessageEvent(ctx, roomID, event.EventReaction, &event.ReactionEventContent{RelatesTo: event.RelatesTo{Type: event.RelAnnotation, EventID: target, Key: emoji}}, mautrix.ReqSendEvent{TransactionID: txn})
 	if err != nil {
-		return nil, err
+		return nil, wrapRedditError(err)
 	}
 	if resp.EventID == "" {
 		return nil, errors.New("reddit returned no reaction identity")
@@ -146,7 +145,7 @@ func (r *RedditClient) HandleMatrixReactionRemove(ctx context.Context, msg *brid
 	}
 	roomID := portalIDToRoomID(msg.Portal.ID)
 	_, err = r.matrix().RedactEvent(ctx, roomID, meta.RemoteEventID, mautrix.ReqRedact{TxnID: txn})
-	return err
+	return wrapRedditError(err)
 }
 
 func (r *RedditClient) HandleMatrixReadReceipt(ctx context.Context, msg *bridgev2.MatrixReadReceipt) error {
@@ -154,7 +153,7 @@ func (r *RedditClient) HandleMatrixReadReceipt(ctx context.Context, msg *bridgev
 	if msg.ExactMessage == nil {
 		return nil
 	}
-	return r.remote().MarkRead(ctx, roomID, messageIDToEventID(msg.ExactMessage.ID))
+	return wrapRedditError(r.remote().MarkRead(ctx, roomID, messageIDToEventID(msg.ExactMessage.ID)))
 }
 
 func (r *RedditClient) HandleMatrixTyping(ctx context.Context, msg *bridgev2.MatrixTyping) error {
@@ -164,7 +163,7 @@ func (r *RedditClient) HandleMatrixTyping(ctx context.Context, msg *bridgev2.Mat
 		return nil
 	}
 	roomID := portalIDToRoomID(msg.Portal.ID)
-	return r.remote().SetTyping(ctx, roomID, msg.IsTyping, 30*time.Second)
+	return wrapRedditError(r.remote().SetTyping(ctx, roomID, msg.IsTyping, 30*time.Second))
 }
 
 func (r *RedditClient) HandleMatrixRoomName(ctx context.Context, msg *bridgev2.MatrixRoomName) (bool, error) {
@@ -177,7 +176,7 @@ func (r *RedditClient) HandleMatrixRoomName(ctx context.Context, msg *bridgev2.M
 	}
 	_, err := r.matrix().SendStateEvent(ctx, roomID, event.StateRoomName, "", msg.Content)
 	if err != nil {
-		return false, err
+		return false, wrapRedditError(err)
 	}
 	msg.Portal.Name = msg.Content.Name
 	msg.Portal.NameSet = true

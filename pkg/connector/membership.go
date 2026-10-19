@@ -43,7 +43,7 @@ func (r *RedditClient) HandleMatrixMembership(ctx context.Context, msg *bridgev2
 	roomID := portalIDToRoomID(msg.Portal.ID)
 	state, key, err := r.resolveRoomState(ctx, roomID, &mautrix.SyncJoinedRoom{}, &roomSnapshots{})
 	if err != nil {
-		return nil, err
+		return nil, wrapRedditError(err)
 	}
 	if key != msg.Portal.PortalKey || state.Type != "private_group" {
 		return nil, bridgev2.ErrMembershipNotSupported
@@ -56,10 +56,10 @@ func (r *RedditClient) HandleMatrixMembership(ctx context.Context, msg *bridgev2
 		targetID = networkid.UserID(target.ID)
 	}
 	if !strings.HasPrefix(string(targetID), "t2_") || strings.Trim(string(targetID)[3:], "0123456789abcdefghijklmnopqrstuvwxyz") != "" || len(targetID) <= 3 {
-		return nil, errors.New("membership target is not a Reddit account ID")
+		return nil, permanentFailure(event.MessageStatusUnsupported, "only reddit accounts can be invited or removed")
 	}
 	if targetID == r.userID {
-		return nil, errors.New("use accept or leave for your own membership")
+		return nil, permanentFailure(event.MessageStatusUnsupported, "use accept or leave to change your own membership")
 	}
 	targetMXID := userIDToMatrix(targetID, "")
 	if msg.Type == bridgev2.Invite {
@@ -67,5 +67,5 @@ func (r *RedditClient) HandleMatrixMembership(ctx context.Context, msg *bridgev2
 	} else {
 		_, err = r.matrix().KickUser(ctx, roomID, &mautrix.ReqKickUser{UserID: targetMXID})
 	}
-	return nil, err
+	return nil, wrapRedditError(err)
 }

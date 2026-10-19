@@ -62,24 +62,24 @@ func (r *RedditClient) HandleMatrixDeleteChat(ctx context.Context, msg *bridgev2
 		return errors.New("chat belongs to another login")
 	}
 	if msg.Content.DeleteForEveryone {
-		return errors.New("reddit chats cannot be deleted for everyone")
+		return permanentFailure(event.MessageStatusUnsupported, "reddit chats can't be deleted for everyone")
 	}
 	roomID := portalIDToRoomID(msg.Portal.ID)
 	state, key, err := r.resolveRoomState(ctx, roomID, &mautrix.SyncJoinedRoom{}, &roomSnapshots{})
 	if err != nil {
-		return err
+		return wrapRedditError(err)
 	}
 	if key != msg.Portal.PortalKey {
 		return errors.New("chat ownership does not match Reddit room state")
 	}
 	switch state.Type {
 	case "direct":
-		return r.matrix().SetRoomAccountData(ctx, roomID, "com.reddit.hidden_chat", map[string]bool{"hidden": true})
+		return wrapRedditError(r.matrix().SetRoomAccountData(ctx, roomID, "com.reddit.hidden_chat", map[string]bool{"hidden": true}))
 	case "private_group":
 		_, err = r.matrix().LeaveRoom(ctx, roomID)
-		return err
+		return wrapRedditError(err)
 	default:
-		return errors.New("unsupported Reddit chat type for deletion")
+		return bridgev2.ErrDeleteChatNotSupported
 	}
 }
 
@@ -131,7 +131,7 @@ func (r *RedditClient) HandleMatrixAcceptMessageRequest(ctx context.Context, msg
 	roomID := portalIDToRoomID(msg.Portal.ID)
 	joined, err := r.matrix().JoinRoomByID(ctx, roomID)
 	if err != nil {
-		return err
+		return wrapRedditError(err)
 	}
 	if joined.RoomID != "" && joined.RoomID != roomID {
 		return errors.New("reddit accepted a different conversation")
