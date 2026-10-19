@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/bridgev2"
 
 	"github.com/beeper/reddit/pkg/redditchat"
@@ -50,11 +51,7 @@ var (
 		ErrCode:    "FI.MAU.REDDIT.LOGIN_REJECTED",
 		StatusCode: http.StatusBadRequest,
 	}
-	ErrLoginUnknown = bridgev2.RespError{
-		ErrCode:    "M_UNKNOWN",
-		Err:        "Internal error logging in to Reddit",
-		StatusCode: http.StatusInternalServerError,
-	}
+	ErrLoginUnknown = bridgev2.RespError(mautrix.MUnknown.WithMessage("Internal error logging in to Reddit"))
 )
 
 // The original error stays in the chain for logs; only the mapped RespError is
