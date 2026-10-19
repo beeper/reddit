@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const (
@@ -103,7 +104,7 @@ func NewRedditSession(httpClient *http.Client, baseURL, userAgent string) (*Redd
 		if err != nil {
 			return nil, err
 		}
-		httpClient = &http.Client{Jar: jar}
+		httpClient = &http.Client{Jar: jar, Timeout: 30 * time.Second}
 	}
 	if httpClient.Jar == nil {
 		jar, err := cookiejar.New(nil)

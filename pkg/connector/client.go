@@ -82,7 +82,7 @@ func restoreSession(meta *UserLoginMetadata) (*redditchat.RedditSession, error) 
 	if err != nil {
 		return nil, err
 	}
-	httpClient := &http.Client{Jar: jar}
+	httpClient := &http.Client{Jar: jar, Timeout: 30 * time.Second}
 	session, err := redditchat.NewRedditSession(httpClient, "", "")
 	if err != nil {
 		return nil, err
