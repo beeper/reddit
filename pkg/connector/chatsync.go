@@ -60,10 +60,15 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 				}
 				if refreshNeedsLogin(refreshErr) {
 					log.Warn().Err(refreshErr).Msg("Reddit session requires reauthentication")
+					message := "Reddit session expired. Please sign in again."
+					if errors.Is(refreshErr, errRefreshAccountMismatch) {
+						message = "Reddit session belongs to a different account. Sign in again with the original account."
+					}
 					r.userLogin.BridgeState.Send(status.BridgeState{
 						StateEvent: status.StateBadCredentials,
 						Error:      "reddit-token-refresh-failed",
-						Message:    refreshErr.Error(),
+						Message:    message,
+						Info:       map[string]any{"go_error": refreshErr.Error()},
 						UserAction: status.UserActionRelogin,
 					})
 					return
