@@ -82,7 +82,7 @@ func restoreSession(meta *UserLoginMetadata) (*redditchat.RedditSession, error) 
 	if err != nil {
 		return nil, err
 	}
-	httpClient := &http.Client{Jar: jar}
+	httpClient := &http.Client{Jar: jar, Timeout: 30 * time.Second}
 	session, err := redditchat.NewRedditSession(httpClient, "", "")
 	if err != nil {
 		return nil, err
@@ -142,6 +142,8 @@ func (r *RedditClient) IsThisUser(ctx context.Context, userID networkid.UserID) 
 }
 
 func (r *RedditClient) LogoutRemote(ctx context.Context) {
+	// Stop syncing first so a 401 after logout can't refresh the token again.
+	r.Disconnect()
 	if !r.IsLoggedIn() {
 		return
 	}

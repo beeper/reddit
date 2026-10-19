@@ -126,7 +126,7 @@ func (r *RedditClient) resolveOutgoingReaction(ctx context.Context, value string
 	} else if key, ok := nativeReactionKey(value); ok {
 		return key, nil
 	}
-	return "", errors.New("reddit supports its native reaction palette; choose an imported Reddit reaction or a matching emoji")
+	return "", permanentFailure(event.MessageStatusUnsupported, "reddit only supports its own reactions")
 }
 
 var _ bridgev2.StickerImportingNetworkAPI = (*RedditClient)(nil)

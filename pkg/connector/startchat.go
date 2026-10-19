@@ -2,11 +2,10 @@ package connector
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"strings"
 
 	"go.mau.fi/util/ptr"
+	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
@@ -27,24 +26,24 @@ func (r *RedditClient) ResolveIdentifier(ctx context.Context, identifier string,
 	identifier = strings.TrimPrefix(identifier, "u/")
 	identifier = strings.TrimPrefix(identifier, "/u/")
 	if identifier == "" {
-		return nil, errors.New("empty identifier")
+		return nil, bridgev2.RespError(mautrix.MInvalidParam.WithMessage("Enter a Reddit username."))
 	}
 	results, err := r.remote().SearchUsers(ctx, identifier)
 	if err != nil {
-		return nil, fmt.Errorf("search users: %w", err)
+		return nil, wrapRedditRespError(err)
 	}
 	var match *userDirectoryHit
 	for _, hit := range results.Results {
 		display := hit.DisplayName
 		if strings.EqualFold(stripUserPrefix(display), identifier) || strings.EqualFold(string(hit.UserID), "@"+identifier+":reddit.com") {
 			if match != nil && match.UserID != hit.UserID {
-				return nil, fmt.Errorf("multiple Reddit users matched %q", identifier)
+				return nil, bridgev2.RespError(mautrix.MInvalidParam.WithMessage("Multiple Reddit users match %q.", identifier))
 			}
 			match = &userDirectoryHit{UserID: hit.UserID, Name: display, Avatar: string(hit.AvatarURL)}
 		}
 	}
 	if match == nil {
-		return nil, fmt.Errorf("no Reddit user matched %q", identifier)
+		return nil, bridgev2.RespError(mautrix.MNotFound.WithMessage("No Reddit user found for %q.", identifier))
 	}
 
 	uid := makeUserID(match.UserID)
@@ -62,7 +61,7 @@ func (r *RedditClient) ResolveIdentifier(ctx context.Context, identifier string,
 	}
 	roomID, _, err := r.remote().CreateOrGetDM(ctx, match.UserID)
 	if err != nil {
-		return nil, fmt.Errorf("create dm: %w", err)
+		return nil, wrapRedditRespError(err)
 	}
 	portalKey := networkid.PortalKey{ID: makePortalID(roomID), Receiver: r.userLogin.ID}
 	resp.Chat = &bridgev2.CreateChatResponse{
@@ -79,7 +78,7 @@ func (r *RedditClient) SearchUsers(ctx context.Context, query string) ([]*bridge
 	query = strings.TrimSpace(query)
 	results, err := r.remote().SearchUsers(ctx, query)
 	if err != nil {
-		return nil, err
+		return nil, wrapRedditRespError(err)
 	}
 	out := make([]*bridgev2.ResolveIdentifierResponse, 0, len(results.Results))
 	for _, hit := range results.Results {
@@ -98,14 +97,13 @@ func (r *RedditClient) SearchUsers(ctx context.Context, query string) ([]*bridge
 }
 
 // CreateGroup spins up a private Reddit chat with the requested participants.
-// Reddit has rate limits on group creation for new accounts; surface errors
-// directly from the underlying library to the caller.
+// Reddit has rate limits on group creation for new accounts.
 func (r *RedditClient) CreateGroup(ctx context.Context, params *bridgev2.GroupCreateParams) (*bridgev2.CreateChatResponse, error) {
 	if params == nil || params.Name == nil || params.Name.Name == "" {
-		return nil, errors.New("group name is required")
+		return nil, bridgev2.RespError(mautrix.MInvalidParam.WithMessage("Group name is required."))
 	}
 	if len(params.Participants) < 2 {
-		return nil, errors.New("at least 2 participants are required")
+		return nil, bridgev2.RespError(mautrix.MInvalidParam.WithMessage("At least 2 participants are required."))
 	}
 	mxids := make([]id.UserID, 0, len(params.Participants))
 	for _, uid := range params.Participants {
@@ -113,7 +111,7 @@ func (r *RedditClient) CreateGroup(ctx context.Context, params *bridgev2.GroupCr
 	}
 	roomID, err := r.remote().CreateGroup(ctx, params.Name.Name, mxids)
 	if err != nil {
-		return nil, fmt.Errorf("create group: %w", err)
+		return nil, wrapRedditRespError(err)
 	}
 	portalKey := networkid.PortalKey{ID: makePortalID(roomID)}
 	if r.main.Bridge.Config.SplitPortals {
