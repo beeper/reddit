@@ -9,6 +9,7 @@ import (
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
+	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
 
@@ -117,11 +118,18 @@ func (r *RedditClient) CreateGroup(ctx context.Context, params *bridgev2.GroupCr
 	if r.main.Bridge.Config.SplitPortals {
 		portalKey.Receiver = r.userLogin.ID
 	}
+	members := &bridgev2.ChatMemberList{MemberMap: make(bridgev2.ChatMemberMap)}
+	members.MemberMap.Set(bridgev2.ChatMember{EventSender: r.makeSender(userIDToMatrix(r.userID, "")), Membership: event.MembershipJoin})
+	for _, mxid := range mxids {
+		members.MemberMap.Set(bridgev2.ChatMember{EventSender: r.makeSender(mxid), Membership: event.MembershipInvite})
+	}
 	return &bridgev2.CreateChatResponse{
 		PortalKey: portalKey,
 		PortalInfo: &bridgev2.ChatInfo{
-			Name: ptr.Ptr(params.Name.Name),
-			Type: ptr.Ptr(database.RoomTypeDefault),
+			Name:        ptr.Ptr(params.Name.Name),
+			Type:        ptr.Ptr(database.RoomTypeGroupDM),
+			Members:     members,
+			CanBackfill: true,
 		},
 	}, nil
 }
