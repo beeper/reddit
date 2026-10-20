@@ -35,10 +35,17 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 
 	timeoutMS := r.main.Config.PollTimeoutMS()
 	backoff := time.Duration(r.main.Config.ErrorBackoffSeconds()) * time.Second
+	var nextBlockSync time.Time
 
 	for {
 		if err := ctx.Err(); err != nil {
 			return
+		}
+		if r.session != nil && time.Now().After(nextBlockSync) {
+			if err := r.syncBlockedUsers(ctx); err != nil && ctx.Err() == nil {
+				log.Warn().Err(err).Msg("Failed to synchronize Reddit block list")
+			}
+			nextBlockSync = time.Now().Add(time.Minute)
 		}
 		since := r.meta.NextBatch
 		if r.meta.RoomStateVersion < 4 {
@@ -322,7 +329,10 @@ func (r *RedditClient) joinedRoomEvent(state *RoomState, key networkid.PortalKey
 	info := r.chatInfoFromState(state)
 	return &simplevent.ChatResync{
 		EventMeta: simplevent.EventMeta{Type: bridgev2.RemoteEventChatResync, PortalKey: key, CreatePortal: true},
-		ChatInfo:  info,
+		GetChatInfoFunc: func(context.Context, *bridgev2.Portal) (*bridgev2.ChatInfo, error) {
+			// Account block state may change while this room snapshot is queued.
+			return r.chatInfoFromState(state), nil
+		},
 		CheckNeedsBackfillFunc: func(_ context.Context, latest *database.Message) (bool, error) {
 			return info.CanBackfill && (limited || latest == nil), nil
 		},
