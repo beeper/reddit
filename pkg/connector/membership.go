@@ -3,7 +3,6 @@ package connector
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/bridgev2"
@@ -55,7 +54,7 @@ func (r *RedditClient) HandleMatrixMembership(ctx context.Context, msg *bridgev2
 	case *bridgev2.UserLogin:
 		targetID = networkid.UserID(target.ID)
 	}
-	if !strings.HasPrefix(string(targetID), "t2_") || strings.Trim(string(targetID)[3:], "0123456789abcdefghijklmnopqrstuvwxyz") != "" || len(targetID) <= 3 {
+	if !isRedditUserID(targetID) {
 		return nil, permanentFailure(event.MessageStatusUnsupported, "only reddit accounts can be invited or removed")
 	}
 	if targetID == r.userID {

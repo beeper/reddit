@@ -25,6 +25,10 @@ func makeUserLoginID(matrixUserID id.UserID) networkid.UserLoginID {
 	return networkid.UserLoginID(makeUserID(matrixUserID))
 }
 
+func isRedditUserID(userID networkid.UserID) bool {
+	return strings.HasPrefix(string(userID), "t2_") && len(userID) > 3 && strings.Trim(string(userID)[3:], "0123456789abcdefghijklmnopqrstuvwxyz") == ""
+}
+
 func userIDToMatrix(userID networkid.UserID, homeserver string) id.UserID {
 	return id.UserID(fmt.Sprintf("@%s:%s", userID, matrixServerName(homeserver)))
 }
