@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"go.mau.fi/util/ptr"
@@ -9,6 +10,7 @@ import (
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
+	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
 
@@ -18,9 +20,10 @@ var (
 	_ bridgev2.GroupCreatingNetworkAPI       = (*RedditClient)(nil)
 )
 
-// ResolveIdentifier turns a Reddit username (with or without "u/" prefix) into
-// a ghost + optional DM. It first searches Reddit's user directory, then —
-// if createChat is set — opens (or finds) a DM with the resolved user.
+// ResolveIdentifier turns a Reddit username (with or without "u/" prefix) or
+// t2_ user ID into a ghost + optional DM. Usernames are looked up in Reddit's
+// user directory and IDs by profile; if createChat is set, it then opens (or
+// finds) a DM with the resolved user.
 func (r *RedditClient) ResolveIdentifier(ctx context.Context, identifier string, createChat bool) (*bridgev2.ResolveIdentifierResponse, error) {
 	identifier = strings.TrimSpace(identifier)
 	identifier = strings.TrimPrefix(identifier, "u/")
@@ -28,18 +31,32 @@ func (r *RedditClient) ResolveIdentifier(ctx context.Context, identifier string,
 	if identifier == "" {
 		return nil, bridgev2.RespError(mautrix.MInvalidParam.WithMessage("Enter a Reddit username."))
 	}
-	results, err := r.remote().SearchUsers(ctx, identifier)
-	if err != nil {
-		return nil, wrapRedditRespError(err)
-	}
 	var match *userDirectoryHit
-	for _, hit := range results.Results {
-		display := hit.DisplayName
-		if strings.EqualFold(stripUserPrefix(display), identifier) || strings.EqualFold(string(hit.UserID), "@"+identifier+":reddit.com") {
-			if match != nil && match.UserID != hit.UserID {
-				return nil, bridgev2.RespError(mautrix.MInvalidParam.WithMessage("Multiple Reddit users match %q.", identifier))
+	if userID := networkid.UserID(identifier); isRedditUserID(userID) {
+		mxid := userIDToMatrix(userID, "")
+		profile, err := r.matrix().GetProfile(ctx, mxid)
+		if err == nil {
+			name := profile.DisplayName
+			if name == "" {
+				name = identifier
 			}
-			match = &userDirectoryHit{UserID: hit.UserID, Name: display, Avatar: string(hit.AvatarURL)}
+			match = &userDirectoryHit{UserID: mxid, Name: name}
+		} else if !errors.Is(err, mautrix.MNotFound) {
+			return nil, wrapRedditRespError(err)
+		}
+	} else {
+		results, err := r.remote().SearchUsers(ctx, identifier)
+		if err != nil {
+			return nil, wrapRedditRespError(err)
+		}
+		for _, hit := range results.Results {
+			display := hit.DisplayName
+			if strings.EqualFold(stripUserPrefix(display), identifier) || strings.EqualFold(string(hit.UserID), "@"+identifier+":reddit.com") {
+				if match != nil && match.UserID != hit.UserID {
+					return nil, bridgev2.RespError(mautrix.MInvalidParam.WithMessage("Multiple Reddit users match %q.", identifier))
+				}
+				match = &userDirectoryHit{UserID: hit.UserID, Name: display, Avatar: string(hit.AvatarURL)}
+			}
 		}
 	}
 	if match == nil {
@@ -59,7 +76,7 @@ func (r *RedditClient) ResolveIdentifier(ctx context.Context, identifier string,
 	if !createChat {
 		return resp, nil
 	}
-	roomID, _, err := r.remote().CreateOrGetDM(ctx, match.UserID)
+	roomID, created, err := r.remote().CreateOrGetDM(ctx, match.UserID)
 	if err != nil {
 		return nil, wrapRedditRespError(err)
 	}
@@ -69,6 +86,14 @@ func (r *RedditClient) ResolveIdentifier(ctx context.Context, identifier string,
 		PortalInfo: &bridgev2.ChatInfo{
 			Type: ptr.Ptr(database.RoomTypeDM),
 		},
+	}
+	if created {
+		members := &bridgev2.ChatMemberList{MemberMap: make(bridgev2.ChatMemberMap), OtherUserID: uid}
+		members.MemberMap.Set(bridgev2.ChatMember{EventSender: r.makeSender(userIDToMatrix(r.userID, "")), Membership: event.MembershipJoin})
+		members.MemberMap.Set(bridgev2.ChatMember{EventSender: r.makeSender(match.UserID), Membership: event.MembershipInvite})
+		resp.Chat.PortalInfo.Name = resp.UserInfo.Name
+		resp.Chat.PortalInfo.Members = members
+		resp.Chat.PortalInfo.CanBackfill = true
 	}
 	return resp, nil
 }
