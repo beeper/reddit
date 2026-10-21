@@ -10,6 +10,7 @@ import (
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
+	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
 
@@ -75,7 +76,7 @@ func (r *RedditClient) ResolveIdentifier(ctx context.Context, identifier string,
 	if !createChat {
 		return resp, nil
 	}
-	roomID, _, err := r.remote().CreateOrGetDM(ctx, match.UserID)
+	roomID, created, err := r.remote().CreateOrGetDM(ctx, match.UserID)
 	if err != nil {
 		return nil, wrapRedditRespError(err)
 	}
@@ -85,6 +86,14 @@ func (r *RedditClient) ResolveIdentifier(ctx context.Context, identifier string,
 		PortalInfo: &bridgev2.ChatInfo{
 			Type: ptr.Ptr(database.RoomTypeDM),
 		},
+	}
+	if created {
+		members := &bridgev2.ChatMemberList{MemberMap: make(bridgev2.ChatMemberMap), OtherUserID: uid}
+		members.MemberMap.Set(bridgev2.ChatMember{EventSender: r.makeSender(userIDToMatrix(r.userID, "")), Membership: event.MembershipJoin})
+		members.MemberMap.Set(bridgev2.ChatMember{EventSender: r.makeSender(match.UserID), Membership: event.MembershipInvite})
+		resp.Chat.PortalInfo.Name = resp.UserInfo.Name
+		resp.Chat.PortalInfo.Members = members
+		resp.Chat.PortalInfo.CanBackfill = true
 	}
 	return resp, nil
 }
