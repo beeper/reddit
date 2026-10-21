@@ -145,6 +145,8 @@ func (r *RedditClient) roomState(ctx context.Context, roomID id.RoomID, joined *
 		return nil, networkid.PortalKey{}, unbridgeable(err)
 	}
 	if next.Type == "" {
+		// Reddit can send a new chat's members before its type.
+		r.rooms[roomID] = next
 		return nil, networkid.PortalKey{}, unbridgeable(errMissingChatType)
 	}
 	key := r.makePortalKey(roomID, next.Type == "direct")
