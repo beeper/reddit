@@ -143,7 +143,9 @@ func (r *RedditClient) pendingRequestEvent(state *RoomState, key networkid.Porta
 	info := r.chatInfoFromState(state)
 	return &simplevent.ChatResync{
 		EventMeta: simplevent.EventMeta{Type: bridgev2.RemoteEventChatResync, PortalKey: key, CreatePortal: true},
-		ChatInfo:  info,
+		GetChatInfoFunc: func(context.Context, *bridgev2.Portal) (*bridgev2.ChatInfo, error) {
+			return r.chatInfoFromState(state), nil
+		},
 		CheckNeedsBackfillFunc: func(_ context.Context, latest *database.Message) (bool, error) {
 			// Populate an existing empty request room too. Subsequent resyncs
 			// must not repeatedly fetch the same preview; older history has its

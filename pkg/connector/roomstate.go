@@ -244,6 +244,9 @@ func (r *RedditClient) chatInfoFromState(state *RoomState) *bridgev2.ChatInfo {
 		members.IsFull = members.TotalMemberCount == len(members.MemberMap)
 	}
 	info.Members = members
+	if state.Type == "direct" {
+		info.UserBlocked = r.userBlocked(members.OtherUserID)
+	}
 	info.ExtraUpdates = func(ctx context.Context, portal *bridgev2.Portal) bool {
 		meta, ok := portal.Metadata.(*PortalMetadata)
 		if !ok || meta == nil {
