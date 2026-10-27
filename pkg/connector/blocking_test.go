@@ -85,7 +85,7 @@ func TestBlockListNativeProjection(t *testing.T) {
 	if _, err := r.refreshBlockedUsers(t.Context()); err != nil || *r.userBlocked("t2_b") {
 		t.Fatal("native unblock did not clear cached state")
 	}
-	if info, err := change.GetChatInfoChange(t.Context()); err != nil || *info.ChatInfo.UserBlocked {
+	if info, err := change.GetChatInfoChange(t.Context(), nil); err != nil || *info.ChatInfo.UserBlocked {
 		t.Fatal("block-list conversion used an outdated snapshot")
 	}
 }
