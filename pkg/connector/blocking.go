@@ -121,7 +121,7 @@ type blockListChange struct {
 
 var _ bridgev2.RemoteChatInfoChange = (*blockListChange)(nil)
 
-func (evt *blockListChange) GetChatInfoChange(context.Context) (*bridgev2.ChatInfoChange, error) {
+func (evt *blockListChange) GetChatInfoChange(context.Context, *bridgev2.Portal) (*bridgev2.ChatInfoChange, error) {
 	// Read at handling time: a Beeper block/unblock may have completed while
 	// this native snapshot was waiting in the portal's event queue.
 	return &bridgev2.ChatInfoChange{ChatInfo: &bridgev2.ChatInfo{
