@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/crypto/attachment"
 	"maunium.net/go/mautrix/event"
@@ -240,6 +241,34 @@ func TestMediaErrorsDoNotExposeCapabilityURLs(t *testing.T) {
 	cancel()
 	if !errors.Is(mediaError(ctx, "download", errors.New("failed")), context.Canceled) {
 		t.Fatal("cancellation was hidden")
+	}
+}
+
+func TestMediaErrorsMapUpstreamStatusForMediaProxy(t *testing.T) {
+	status := func(code int, respErr *mautrix.RespError) error {
+		return mautrix.HTTPError{Response: &http.Response{StatusCode: code}, RespError: respErr}
+	}
+	for _, tc := range []struct {
+		name         string
+		err          error
+		wantStatus   int
+		unbridgeable bool
+	}{
+		{"gone", status(http.StatusNotFound, nil), http.StatusNotFound, true},
+		{"expired token", status(http.StatusUnauthorized, &mautrix.RespError{ErrCode: "M_UNKNOWN_TOKEN"}), http.StatusBadGateway, false},
+		{"forbidden", status(http.StatusForbidden, &mautrix.RespError{ErrCode: "M_FORBIDDEN"}), http.StatusForbidden, true},
+		{"rate limited", status(http.StatusTooManyRequests, nil), http.StatusTooManyRequests, false},
+		{"rejected", status(http.StatusBadRequest, &mautrix.RespError{ErrCode: "M_UNKNOWN"}), http.StatusBadGateway, true},
+		{"outage", status(http.StatusServiceUnavailable, nil), http.StatusBadGateway, false},
+		{"transport", mautrix.HTTPError{Message: "request error", WrappedError: errors.New("connection reset")}, http.StatusBadGateway, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := mediaError(context.Background(), "download", tc.err)
+			respErr, ok := errors.AsType[mautrix.RespError](err)
+			if !ok || respErr.StatusCode != tc.wantStatus || isUnbridgeable(err) != tc.unbridgeable {
+				t.Fatalf("got %v (status %d, unbridgeable %t)", err, respErr.StatusCode, isUnbridgeable(err))
+			}
+		})
 	}
 }
 

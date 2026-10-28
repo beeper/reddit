@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -28,7 +27,7 @@ func imageMIME(data []byte) (string, error) {
 func readMediaBounded(reader io.Reader, limit int64) ([]byte, error) {
 	data, err := io.ReadAll(io.LimitReader(reader, limit+1))
 	if err != nil {
-		return nil, errors.New("failed to read attachment")
+		return nil, mautrix.MUnknown.WithMessage("failed to read attachment").WithStatus(http.StatusBadGateway).WithCanRetry(true)
 	}
 	if int64(len(data)) > limit {
 		return nil, bridgev2.ErrMediaTooLarge
@@ -42,15 +41,29 @@ func mediaError(ctx context.Context, operation string, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	safe := fmt.Errorf("%s failed", operation)
 	var httpErr mautrix.HTTPError
-	if errors.As(err, &httpErr) && httpErr.Response != nil {
-		safe = fmt.Errorf("%s failed (HTTP %d)", operation, httpErr.Response.StatusCode)
+	if !errors.As(err, &httpErr) || httpErr.Response == nil {
+		return mautrix.MUnknown.WithMessage("%s failed", operation).WithStatus(http.StatusBadGateway).WithCanRetry(true)
 	}
+	code := httpErr.Response.StatusCode
+	safe := mediaStatusError(code).WithMessage("%s failed (HTTP %d)", operation, code)
 	if isPermanentHTTPError(err) {
 		return unbridgeable(safe)
 	}
 	return safe
+}
+
+func mediaStatusError(code int) mautrix.RespError {
+	switch {
+	case isGoneStatus(code):
+		return mautrix.MNotFound
+	case code == http.StatusForbidden:
+		return mautrix.MForbidden
+	case code == http.StatusTooManyRequests:
+		return mautrix.MLimitExceeded.WithCanRetry(true)
+	default:
+		return mautrix.MUnknown.WithStatus(http.StatusBadGateway).WithCanRetry(true)
+	}
 }
 
 // The message is never sent when its media fails, so the failure is certain.
