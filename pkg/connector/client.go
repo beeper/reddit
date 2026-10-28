@@ -35,6 +35,9 @@ type RedditClient struct {
 	syncMu     sync.Mutex
 	syncCancel context.CancelFunc
 	syncDone   chan struct{}
+	// syncLoopMu is held by the running sync loop, so a loop started after a
+	// timed-out Disconnect waits for the previous one to exit.
+	syncLoopMu sync.Mutex
 
 	authRejected atomic.Bool
 
@@ -128,8 +131,8 @@ func (r *RedditClient) Connect(ctx context.Context) {
 
 func (r *RedditClient) Disconnect() {
 	r.syncMu.Lock()
-	cancel := r.syncCancel
-	done := r.syncDone
+	cancel, done := r.syncCancel, r.syncDone
+	r.syncCancel, r.syncDone = nil, nil
 	r.syncMu.Unlock()
 	if cancel != nil {
 		cancel()

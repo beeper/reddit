@@ -30,6 +30,8 @@ func syncRetryDelay(minDelay time.Duration, failures int) time.Duration {
 // runSync is the long-poll loop that translates Reddit-Matrix sync responses
 // into bridgev2 RemoteEvents. It exits when the context is cancelled.
 func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
+	r.syncLoopMu.Lock()
+	defer r.syncLoopMu.Unlock()
 	defer func() {
 		r.syncMu.Lock()
 		if r.syncDone == done {
@@ -124,8 +126,16 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 
 		err = r.handleSync(ctx, resp, &roomSnapshots{})
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			log.Error().Err(err).Msg("Failed to process Reddit sync; retaining cursor")
-			r.userLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateTransientDisconnect, Error: "reddit-sync-apply-failed", Message: "Unable to synchronize Reddit chat state. Retrying."})
+			r.userLogin.BridgeState.Send(status.BridgeState{
+				StateEvent: status.StateTransientDisconnect,
+				Error:      "reddit-sync-apply-failed",
+				Message:    "Unable to synchronize Reddit chat state. Retrying.",
+				Info:       map[string]any{"go_error": err.Error()},
+			})
 			if !backOff() {
 				return
 			}
