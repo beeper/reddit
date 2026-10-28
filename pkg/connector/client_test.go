@@ -2,6 +2,8 @@ package connector
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +31,27 @@ func testClient(t *testing.T, handler http.HandlerFunc) *RedditClient {
 		t.Fatal(err)
 	}
 	return &RedditClient{main: main, rc: rc, meta: &UserLoginMetadata{Credentials: creds}, userID: "t2_a", userLogin: &bridgev2.UserLogin{UserLogin: &database.UserLogin{ID: "t2_a"}}}
+}
+
+func TestRefreshNeedsLoginOnlyForInvalidSession(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"missing session cookie", fmt.Errorf("%w: missing csrf_token cookie", redditchat.ErrSessionUnavailable), true},
+		{"account mismatch", errRefreshAccountMismatch, true},
+		{"unauthorized", &redditchat.LoginHTTPError{Operation: "chat session", StatusCode: http.StatusUnauthorized}, true},
+		{"forbidden", &redditchat.LoginHTTPError{Operation: "chat session", StatusCode: http.StatusForbidden}, false},
+		{"rate limited", &redditchat.LoginHTTPError{Operation: "chat session", StatusCode: http.StatusTooManyRequests}, false},
+		{"network", errors.New("dial tcp: connection refused"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := refreshNeedsLogin(tc.err); got != tc.want {
+				t.Fatalf("refreshNeedsLogin = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }
 
 func TestResolveIdentifierRequiresUnambiguousExactMatch(t *testing.T) {
