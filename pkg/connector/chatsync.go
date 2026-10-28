@@ -71,6 +71,7 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 					if errors.Is(refreshErr, errRefreshAccountMismatch) {
 						message = "Reddit session belongs to a different account. Sign in again with the original account."
 					}
+					r.authRejected.Store(true)
 					r.userLogin.BridgeState.Send(status.BridgeState{
 						StateEvent: status.StateBadCredentials,
 						Error:      "reddit-token-refresh-failed",
@@ -80,8 +81,8 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 					})
 					return
 				}
-				// Provider outages, rate limits and local save failures retain the
-				// existing session and retry through the normal native poll loop.
+				// Provider outages, edge blocks, rate limits and local save failures
+				// retain the existing session and retry through the native poll loop.
 				err = refreshErr
 			}
 			log.Warn().Err(err).Msg("Sync failed, backing off")
@@ -89,6 +90,7 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 				StateEvent: status.StateTransientDisconnect,
 				Error:      "reddit-sync-error",
 				Message:    "Unable to synchronize Reddit chats. Retrying automatically.",
+				Info:       map[string]any{"go_error": err.Error()},
 			})
 			select {
 			case <-time.After(backoff):

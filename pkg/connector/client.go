@@ -9,6 +9,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -34,6 +35,8 @@ type RedditClient struct {
 	syncMu     sync.Mutex
 	syncCancel context.CancelFunc
 	syncDone   chan struct{}
+
+	authRejected atomic.Bool
 
 	saveMu sync.Mutex
 	roomMu sync.RWMutex
@@ -141,7 +144,7 @@ func (r *RedditClient) Disconnect() {
 
 func (r *RedditClient) IsLoggedIn() bool {
 	client := r.remote()
-	return client != nil && client.Mautrix().AccessToken != ""
+	return client != nil && client.Mautrix().AccessToken != "" && !r.authRejected.Load()
 }
 
 func (r *RedditClient) IsThisUser(ctx context.Context, userID networkid.UserID) bool {
@@ -212,7 +215,7 @@ func (r *RedditClient) refreshChatToken(ctx context.Context) error {
 func refreshNeedsLogin(err error) bool {
 	var httpErr *redditchat.LoginHTTPError
 	return errors.Is(err, redditchat.ErrSessionUnavailable) || errors.Is(err, errRefreshAccountMismatch) ||
-		(errors.As(err, &httpErr) && (httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden))
+		(errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusUnauthorized)
 }
 
 func (r *RedditClient) matrix() *mautrix.Client {
