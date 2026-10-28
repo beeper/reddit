@@ -258,7 +258,7 @@ func TestMediaErrorsMapUpstreamStatusForMediaProxy(t *testing.T) {
 		{"expired token", status(http.StatusUnauthorized, &mautrix.RespError{ErrCode: "M_UNKNOWN_TOKEN"}), http.StatusBadGateway, false},
 		{"forbidden", status(http.StatusForbidden, &mautrix.RespError{ErrCode: "M_FORBIDDEN"}), http.StatusForbidden, true},
 		{"rate limited", status(http.StatusTooManyRequests, nil), http.StatusTooManyRequests, false},
-		{"rejected", status(http.StatusBadRequest, &mautrix.RespError{ErrCode: "M_UNKNOWN"}), http.StatusBadGateway, true},
+		{"rejected", status(http.StatusBadRequest, &mautrix.RespError{ErrCode: "M_UNKNOWN"}), http.StatusNotFound, true},
 		{"outage", status(http.StatusServiceUnavailable, nil), http.StatusBadGateway, false},
 		{"transport", mautrix.HTTPError{Message: "request error", WrappedError: errors.New("connection reset")}, http.StatusBadGateway, false},
 	} {

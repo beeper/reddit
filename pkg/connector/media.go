@@ -46,14 +46,15 @@ func mediaError(ctx context.Context, operation string, err error) error {
 		return mautrix.MUnknown.WithMessage("%s failed", operation).WithStatus(http.StatusBadGateway).WithCanRetry(true)
 	}
 	code := httpErr.Response.StatusCode
-	safe := mediaStatusError(code).WithMessage("%s failed (HTTP %d)", operation, code)
-	if isPermanentHTTPError(err) {
+	permanent := isPermanentHTTPError(err)
+	safe := mediaStatusError(code, permanent).WithMessage("%s failed (HTTP %d)", operation, code)
+	if permanent {
 		return unbridgeable(safe)
 	}
 	return safe
 }
 
-func mediaStatusError(code int) mautrix.RespError {
+func mediaStatusError(code int, permanent bool) mautrix.RespError {
 	switch {
 	case isGoneStatus(code):
 		return mautrix.MNotFound
@@ -61,6 +62,8 @@ func mediaStatusError(code int) mautrix.RespError {
 		return mautrix.MForbidden
 	case code == http.StatusTooManyRequests:
 		return mautrix.MLimitExceeded.WithCanRetry(true)
+	case permanent:
+		return mautrix.MNotFound
 	default:
 		return mautrix.MUnknown.WithStatus(http.StatusBadGateway).WithCanRetry(true)
 	}
