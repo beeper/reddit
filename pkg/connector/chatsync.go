@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math/rand/v2"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -19,9 +20,18 @@ import (
 	"github.com/beeper/reddit/pkg/redditchat"
 )
 
+const maxSyncRetryDelay = 5 * time.Minute
+
+func syncRetryDelay(minDelay time.Duration, failures int) time.Duration {
+	delay := min(minDelay<<min(failures, 10), maxSyncRetryDelay)
+	return max(minDelay, delay/2+rand.N(delay/2+1))
+}
+
 // runSync is the long-poll loop that translates Reddit-Matrix sync responses
 // into bridgev2 RemoteEvents. It exits when the context is cancelled.
 func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
+	r.syncLoopMu.Lock()
+	defer r.syncLoopMu.Unlock()
 	defer func() {
 		r.syncMu.Lock()
 		if r.syncDone == done {
@@ -34,8 +44,19 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 	log := zerolog.Ctx(ctx)
 
 	timeoutMS := r.main.Config.PollTimeoutMS()
-	backoff := time.Duration(r.main.Config.ErrorBackoffSeconds()) * time.Second
+	minBackoff := time.Duration(r.main.Config.ErrorBackoffSeconds()) * time.Second
 	var nextBlockSync time.Time
+	var failures int
+	var refreshed bool
+	backOff := func() bool {
+		failures++
+		select {
+		case <-time.After(syncRetryDelay(minBackoff, failures)):
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -59,7 +80,8 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 			// An expired chat token may still have a renewable Reddit session.
 			if isUnauthorized(err) {
 				refreshErr := r.refreshChatToken(ctx)
-				if refreshErr == nil {
+				if refreshErr == nil && !refreshed {
+					refreshed = true
 					continue
 				}
 				if ctx.Err() != nil {
@@ -71,6 +93,7 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 					if errors.Is(refreshErr, errRefreshAccountMismatch) {
 						message = "Reddit session belongs to a different account. Sign in again with the original account."
 					}
+					r.authRejected.Store(true)
 					r.userLogin.BridgeState.Send(status.BridgeState{
 						StateEvent: status.StateBadCredentials,
 						Error:      "reddit-token-refresh-failed",
@@ -80,31 +103,40 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 					})
 					return
 				}
-				// Provider outages, rate limits and local save failures retain the
-				// existing session and retry through the normal native poll loop.
-				err = refreshErr
+				// Provider outages, edge blocks, rate limits and local save failures
+				// retain the existing session and retry through the native poll loop.
+				// A refreshed token that is still rejected retries the same way.
+				if refreshErr != nil {
+					err = refreshErr
+				}
 			}
 			log.Warn().Err(err).Msg("Sync failed, backing off")
 			r.userLogin.BridgeState.Send(status.BridgeState{
 				StateEvent: status.StateTransientDisconnect,
 				Error:      "reddit-sync-error",
 				Message:    "Unable to synchronize Reddit chats. Retrying automatically.",
+				Info:       map[string]any{"go_error": err.Error()},
 			})
-			select {
-			case <-time.After(backoff):
-			case <-ctx.Done():
+			if !backOff() {
 				return
 			}
 			continue
 		}
+		refreshed = false
 
 		err = r.handleSync(ctx, resp, &roomSnapshots{})
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			log.Error().Err(err).Msg("Failed to process Reddit sync; retaining cursor")
-			r.userLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateTransientDisconnect, Error: "reddit-sync-apply-failed", Message: "Unable to synchronize Reddit chat state. Retrying."})
-			select {
-			case <-time.After(backoff):
-			case <-ctx.Done():
+			r.userLogin.BridgeState.Send(status.BridgeState{
+				StateEvent: status.StateTransientDisconnect,
+				Error:      "reddit-sync-apply-failed",
+				Message:    "Unable to synchronize Reddit chat state. Retrying.",
+				Info:       map[string]any{"go_error": err.Error()},
+			})
+			if !backOff() {
 				return
 			}
 			continue
@@ -115,13 +147,12 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 		r.meta.NextBatch, r.meta.RoomStateVersion = resp.NextBatch, 4
 		if err = r.saveMeta(ctx); err != nil {
 			r.meta.NextBatch, r.meta.RoomStateVersion = previousCursor, previousVersion
-			select {
-			case <-time.After(backoff):
-			case <-ctx.Done():
+			if !backOff() {
 				return
 			}
 			continue
 		}
+		failures = 0
 		// First successfully processed sync after (re)connect: mark connected.
 		if r.userLogin.BridgeState.GetPrevUnsent().StateEvent != status.StateConnected {
 			r.userLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
