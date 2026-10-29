@@ -363,9 +363,9 @@ func (r *RedditClient) joinedRoomEvent(state *RoomState, key networkid.PortalKey
 	info := r.chatInfoFromState(state)
 	return &simplevent.ChatResync{
 		EventMeta: simplevent.EventMeta{Type: bridgev2.RemoteEventChatResync, PortalKey: key, CreatePortal: true},
-		GetChatInfoFunc: func(context.Context, *bridgev2.Portal) (*bridgev2.ChatInfo, error) {
+		GetChatInfoFunc: func(ctx context.Context, _ *bridgev2.Portal) (*bridgev2.ChatInfo, error) {
 			// Account block state may change while this room snapshot is queued.
-			return r.chatInfoFromState(state), nil
+			return r.addMemberAvatars(ctx, r.chatInfoFromState(state)), nil
 		},
 		CheckNeedsBackfillFunc: func(_ context.Context, latest *database.Message) (bool, error) {
 			return info.CanBackfill && (limited || latest == nil), nil

@@ -21,7 +21,7 @@ func (r *RedditClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal)
 	if key != portal.PortalKey {
 		return nil, errors.New("chat ownership does not match Reddit room state")
 	}
-	return r.chatInfoFromState(state), nil
+	return r.addMemberAvatars(ctx, r.chatInfoFromState(state)), nil
 }
 
 // GetUserInfo fetches profile info for a ghost (a Reddit user puppeted into
@@ -40,19 +40,10 @@ func (r *RedditClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (
 		Username: stripUserPrefix(name),
 		UserID:   string(ghost.ID),
 	})
-	info := &bridgev2.UserInfo{Name: ptr.Ptr(formatted)}
-	if !resp.AvatarURL.IsEmpty() {
-		mxc := resp.AvatarURL.CUString()
-		info.Avatar = &bridgev2.Avatar{
-			ID:  networkid.AvatarID(mxc),
-			Get: func(ctx context.Context) ([]byte, error) { return r.downloadRedditMedia(ctx, mxc, nil) },
-		}
-		if r.main.directMedia {
-			// Retain the normal download fallback if the identity cannot fit.
-			info.Avatar.MXC, _ = r.directMediaURI(ctx, mxc)
-		}
-	}
-	return info, nil
+	return &bridgev2.UserInfo{
+		Name:   ptr.Ptr(formatted),
+		Avatar: r.redditorAvatars(ctx, []networkid.UserID{ghost.ID})[ghost.ID],
+	}, nil
 }
 
 func stripUserPrefix(name string) string {
