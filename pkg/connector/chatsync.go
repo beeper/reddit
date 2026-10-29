@@ -238,11 +238,15 @@ func (r *RedditClient) applyHiddenChatData(ctx context.Context, resp *redditchat
 func (r *RedditClient) unhideChatsWithNewMessages(ctx context.Context, resp *redditchat.SyncResponse) error {
 	for _, rooms := range []map[id.RoomID]*mautrix.SyncJoinedRoom{resp.Rooms.Join, resp.Rooms.Peek} {
 		for roomID, room := range rooms {
-			if room == nil || !r.meta.HiddenRooms[roomID] || !slices.ContainsFunc(room.Timeline.Events, isMessageEvent) {
+			// A hide in the same batch may be newer than its messages.
+			if room == nil || !r.meta.HiddenRooms[roomID] || slices.ContainsFunc(room.AccountData.Events, isHiddenChatEvent) || !slices.ContainsFunc(room.Timeline.Events, isMessageEvent) {
 				continue
 			}
-			if err := r.matrix().SetRoomAccountData(ctx, roomID, "com.reddit.hidden_chat", map[string]bool{"hidden": false}); err != nil {
+			err := r.matrix().SetRoomAccountData(ctx, roomID, "com.reddit.hidden_chat", map[string]bool{"hidden": false})
+			if err != nil && !isPermanentHTTPError(err) {
 				return wrapRedditError(err)
+			} else if err != nil {
+				zerolog.Ctx(ctx).Warn().Err(err).Stringer("room_id", roomID).Msg("Failed to unhide Reddit chat natively")
 			}
 			delete(r.meta.HiddenRooms, roomID)
 		}
@@ -252,6 +256,10 @@ func (r *RedditClient) unhideChatsWithNewMessages(ctx context.Context, resp *red
 
 func isMessageEvent(evt *event.Event) bool {
 	return evt != nil && evt.Type == event.EventMessage
+}
+
+func isHiddenChatEvent(evt *event.Event) bool {
+	return evt != nil && evt.Type.Type == "com.reddit.hidden_chat"
 }
 
 func parseHiddenChat(evt *event.Event) (bool, error) {
