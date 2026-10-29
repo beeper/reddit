@@ -47,6 +47,9 @@ func (r *RedditClient) convertMessage(ctx context.Context, portal *bridgev2.Port
 			return nil, err
 		}
 	case event.MsgText, event.MsgNotice, event.MsgEmote:
+		if portal != nil {
+			r.convertMentions(portal, &content)
+		}
 	default:
 		return nil, bridgev2.ErrUnsupportedMessageType
 	}
