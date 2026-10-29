@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -98,7 +99,7 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 			continue
 		}
 
-		err = r.handleSync(ctx, resp, &roomSnapshots{})
+		err = r.handleSync(ctx, resp, &roomSnapshots{}, since != "")
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to process Reddit sync; retaining cursor")
 			r.userLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateTransientDisconnect, Error: "reddit-sync-apply-failed", Message: "Unable to synchronize Reddit chat state. Retrying."})
@@ -132,10 +133,15 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 
 // Unbridgeable native data is skipped so it cannot hold the cursor forever.
 // Any other failure retries the whole batch.
-func (r *RedditClient) handleSync(ctx context.Context, resp *redditchat.SyncResponse, snapshots *roomSnapshots) error {
+func (r *RedditClient) handleSync(ctx context.Context, resp *redditchat.SyncResponse, snapshots *roomSnapshots, incremental bool) error {
 	unhidden, err := r.applyHiddenChatData(ctx, resp)
 	if err != nil {
 		return err
+	}
+	if incremental {
+		if err = r.unhideChatsWithNewMessages(ctx, resp); err != nil {
+			return err
+		}
 	}
 	for roomID, joined := range resp.Rooms.Join {
 		if r.meta.HiddenRooms[roomID] {
@@ -177,7 +183,7 @@ func (r *RedditClient) handleSync(ctx context.Context, resp *redditchat.SyncResp
 		if err != nil {
 			return err
 		}
-		return r.handleSync(ctx, state, snapshots)
+		return r.handleSync(ctx, state, snapshots, false)
 	}
 	return nil
 }
@@ -226,6 +232,34 @@ func (r *RedditClient) applyHiddenChatData(ctx context.Context, resp *redditchat
 		}
 	}
 	return unhidden, nil
+}
+
+// Reddit keeps a hidden chat hidden only until someone sends another message.
+func (r *RedditClient) unhideChatsWithNewMessages(ctx context.Context, resp *redditchat.SyncResponse) error {
+	for _, rooms := range []map[id.RoomID]*mautrix.SyncJoinedRoom{resp.Rooms.Join, resp.Rooms.Peek} {
+		for roomID, room := range rooms {
+			// A hide in the same batch may be newer than its messages.
+			if room == nil || !r.meta.HiddenRooms[roomID] || slices.ContainsFunc(room.AccountData.Events, isHiddenChatEvent) || !slices.ContainsFunc(room.Timeline.Events, isMessageEvent) {
+				continue
+			}
+			err := r.matrix().SetRoomAccountData(ctx, roomID, "com.reddit.hidden_chat", map[string]bool{"hidden": false})
+			if err != nil && !isPermanentHTTPError(err) {
+				return wrapRedditError(err)
+			} else if err != nil {
+				zerolog.Ctx(ctx).Warn().Err(err).Stringer("room_id", roomID).Msg("Failed to unhide Reddit chat natively")
+			}
+			delete(r.meta.HiddenRooms, roomID)
+		}
+	}
+	return nil
+}
+
+func isMessageEvent(evt *event.Event) bool {
+	return evt != nil && evt.Type == event.EventMessage
+}
+
+func isHiddenChatEvent(evt *event.Event) bool {
+	return evt != nil && evt.Type.Type == "com.reddit.hidden_chat"
 }
 
 func parseHiddenChat(evt *event.Event) (bool, error) {
