@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"slices"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -12,38 +11,25 @@ import (
 	"maunium.net/go/mautrix/bridgev2/networkid"
 )
 
-const redditorBatchSize = 50
+const (
+	redditorBatchSize = 50
+	avatarRetryDelay  = 5 * time.Minute
+)
 
 var avatarHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 // Reddit's chat Matrix server returns no avatars, so they come from the web
-// session. URLs are cached for the client's lifetime; a missing icon is cached
-// as empty so it isn't requested on every resync.
+// session. A missing icon is cached as empty so it isn't requested on every
+// resync, and failed lookups back off rather than repeat on every sync batch.
 func (r *RedditClient) redditorAvatars(ctx context.Context, userIDs []networkid.UserID) map[networkid.UserID]*bridgev2.Avatar {
 	if r.session == nil {
 		return nil
 	}
+	if missing := r.claimUncachedRedditors(userIDs); len(missing) > 0 {
+		r.fetchRedditorIcons(ctx, missing)
+	}
 	r.avatarMu.Lock()
 	defer r.avatarMu.Unlock()
-	var missing []string
-	for _, userID := range userIDs {
-		if _, cached := r.avatarURLs[userID]; !cached && isRedditUserID(userID) {
-			missing = append(missing, string(userID))
-		}
-	}
-	for chunk := range slices.Chunk(missing, redditorBatchSize) {
-		icons, err := r.session.GetRedditorIcons(ctx, chunk)
-		if err != nil {
-			zerolog.Ctx(ctx).Warn().Err(err).Msg("Failed to fetch Reddit avatars")
-			break
-		}
-		if r.avatarURLs == nil {
-			r.avatarURLs = make(map[networkid.UserID]string)
-		}
-		for _, userID := range chunk {
-			r.avatarURLs[networkid.UserID(userID)] = icons[userID]
-		}
-	}
 	avatars := make(map[networkid.UserID]*bridgev2.Avatar, len(userIDs))
 	for _, userID := range userIDs {
 		if url := r.avatarURLs[userID]; url != "" {
@@ -54,6 +40,49 @@ func (r *RedditClient) redditorAvatars(ctx context.Context, userIDs []networkid.
 		}
 	}
 	return avatars
+}
+
+// The lookup itself runs without avatarMu, which the sync path takes. Claimed
+// IDs are skipped by concurrent callers until it finishes.
+func (r *RedditClient) claimUncachedRedditors(userIDs []networkid.UserID) []string {
+	r.avatarMu.Lock()
+	defer r.avatarMu.Unlock()
+	if time.Now().Before(r.avatarRetryAt) {
+		return nil
+	}
+	if r.avatarURLs == nil {
+		r.avatarURLs = make(map[networkid.UserID]string)
+		r.avatarFetching = make(map[networkid.UserID]bool)
+	}
+	var missing []string
+	for _, userID := range userIDs {
+		if len(missing) == redditorBatchSize {
+			break
+		}
+		if _, cached := r.avatarURLs[userID]; !cached && !r.avatarFetching[userID] && isRedditUserID(userID) {
+			r.avatarFetching[userID] = true
+			missing = append(missing, string(userID))
+		}
+	}
+	return missing
+}
+
+func (r *RedditClient) fetchRedditorIcons(ctx context.Context, redditorIDs []string) {
+	icons, err := r.session.GetRedditorIcons(ctx, redditorIDs)
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("Failed to fetch Reddit avatars")
+	}
+	r.avatarMu.Lock()
+	defer r.avatarMu.Unlock()
+	if err != nil {
+		r.avatarRetryAt = time.Now().Add(avatarRetryDelay)
+	}
+	for _, redditorID := range redditorIDs {
+		delete(r.avatarFetching, networkid.UserID(redditorID))
+		if err == nil {
+			r.avatarURLs[networkid.UserID(redditorID)] = icons[redditorID]
+		}
+	}
 }
 
 func (r *RedditClient) addMemberAvatars(ctx context.Context, info *bridgev2.ChatInfo) *bridgev2.ChatInfo {
