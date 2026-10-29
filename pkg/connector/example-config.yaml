@@ -1,7 +1,7 @@
 # Displayname template for Reddit ghost users.
 # .Username is the Reddit display username (without the leading u/).
 # .UserID is the Reddit t2_ ID.
-displayname_template: "{{ .Username }} (Reddit)"
+displayname_template: "{{ .Username }}"
 
 # Override the Reddit Matrix homeserver URL. Leave blank for the default.
 homeserver_url: ""
