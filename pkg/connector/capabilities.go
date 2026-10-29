@@ -2,6 +2,8 @@ package connector
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"time"
 
 	"go.mau.fi/util/jsontime"
@@ -65,13 +67,15 @@ var fileCaps = event.FileFeatureMap{
 	},
 }
 
+var allowedReactions = slices.Sorted(maps.Keys(reactionAliases))
+
 var stateCaps = event.StateFeatureMap{
 	event.StateRoomName.Type: {Level: event.CapLevelFullySupported},
 }
 
 func (r *RedditClient) GetCapabilities(ctx context.Context, portal *bridgev2.Portal) *event.RoomFeatures {
 	caps := (&event.RoomFeatures{
-		ID:                   "com.beeper.reddit.capabilities.v11",
+		ID:                   "com.beeper.reddit.capabilities.v12",
 		File:                 fileCaps,
 		MaxTextLength:        MaxTextLength,
 		LocationMessage:      event.CapLevelDropped,
@@ -82,6 +86,7 @@ func (r *RedditClient) GetCapabilities(ctx context.Context, portal *bridgev2.Por
 		DeleteChat:           true,
 		DeleteMaxAge:         ptr.Ptr(jsontime.S(60 * time.Minute)),
 		Reaction:             event.CapLevelFullySupported,
+		AllowedReactions:     allowedReactions,
 		CustomEmojiReactions: true,
 		MessageRequest: &event.MessageRequestFeatures{
 			AcceptWithButton: event.CapLevelFullySupported,

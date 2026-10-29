@@ -31,8 +31,10 @@ var reactionAliases = map[string]string{
 	"👎": "thumbs_down", "👍": "thumbs_up", "😉": "wink", "😋": "yummy",
 }
 
+var skinToneRemover = strings.NewReplacer("\U0001F3FB", "", "\U0001F3FC", "", "\U0001F3FD", "", "\U0001F3FE", "", "\U0001F3FF", "")
+
 func nativeReactionKey(value string) (string, bool) {
-	name := reactionAliases[variationselector.Remove(value)]
+	name := reactionAliases[skinToneRemover.Replace(variationselector.Remove(value))]
 	for _, asset := range redditchat.ReactionAssets() {
 		if value == asset.Key || value == ":"+asset.Name+":" || asset.Name == name {
 			return asset.Key, true
