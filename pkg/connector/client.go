@@ -48,6 +48,9 @@ type RedditClient struct {
 
 	typingMu sync.Mutex
 	typing   map[networkid.PortalKey][]id.UserID
+
+	avatarMu   sync.Mutex
+	avatarURLs map[networkid.UserID]string
 }
 
 var _ bridgev2.NetworkAPI = (*RedditClient)(nil)
