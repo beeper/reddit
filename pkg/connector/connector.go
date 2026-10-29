@@ -48,7 +48,7 @@ func (rc *RedditConnector) GetName() bridgev2.BridgeName {
 }
 
 func (rc *RedditConnector) GetBridgeInfoVersion() (info, capabilities int) {
-	return 3, 10
+	return 3, 11
 }
 
 func (rc *RedditConnector) SetMaxFileSize(size int64) { rc.mediaUploadLimit.Store(size) }
