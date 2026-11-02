@@ -20,6 +20,8 @@ import (
 	"github.com/beeper/reddit/pkg/redditchat"
 )
 
+const syncRateLimitGrace = time.Minute
+
 // runSync is the long-poll loop that translates Reddit-Matrix sync responses
 // into bridgev2 RemoteEvents. It exits when the context is cancelled.
 func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
@@ -36,7 +38,7 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 
 	timeoutMS := r.main.Config.PollTimeoutMS()
 	backoff := time.Duration(r.main.Config.ErrorBackoffSeconds()) * time.Second
-	var nextBlockSync time.Time
+	var nextBlockSync, rateLimitedSince time.Time
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -53,6 +55,24 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 			since = ""
 		}
 		resp, err := r.remote().Sync(ctx, since, timeoutMS)
+		// Reddit sheds sync load with short 429 bursts while the session stays
+		// healthy, so only a sustained run of them counts as a disconnect.
+		if errors.Is(err, mautrix.MLimitExceeded) {
+			if rateLimitedSince.IsZero() {
+				rateLimitedSince = time.Now()
+			}
+			if time.Since(rateLimitedSince) < syncRateLimitGrace {
+				log.Debug().Err(err).Msg("Sync rate limited, retrying")
+				select {
+				case <-time.After(backoff):
+				case <-ctx.Done():
+					return
+				}
+				continue
+			}
+		} else {
+			rateLimitedSince = time.Time{}
+		}
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return
