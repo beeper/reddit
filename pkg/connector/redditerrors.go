@@ -1,9 +1,11 @@
 package connector
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
+	"github.com/rs/zerolog"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/event"
@@ -66,8 +68,9 @@ func permanentFailure(reason event.MessageStatusReason, msg string) error {
 }
 
 // wrapRedditRespError maps a failed Reddit request to a provisioning error. The
-// original error is kept as the internal error for logs.
-func wrapRedditRespError(err error) error {
+// original error is logged and kept as the internal error.
+func wrapRedditRespError(ctx context.Context, err error) error {
+	zerolog.Ctx(ctx).Err(err).Msg("Reddit request failed")
 	var mapped bridgev2.RespError
 	switch classifyRedditError(err) {
 	case redditFailureRateLimited:

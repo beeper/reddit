@@ -42,12 +42,12 @@ func (r *RedditClient) ResolveIdentifier(ctx context.Context, identifier string,
 			}
 			match = &userDirectoryHit{UserID: mxid, Name: name}
 		} else if !errors.Is(err, mautrix.MNotFound) {
-			return nil, wrapRedditRespError(err)
+			return nil, wrapRedditRespError(ctx, err)
 		}
 	} else {
 		results, err := r.remote().SearchUsers(ctx, identifier)
 		if err != nil {
-			return nil, wrapRedditRespError(err)
+			return nil, wrapRedditRespError(ctx, err)
 		}
 		for _, hit := range results.Results {
 			display := hit.DisplayName
@@ -78,7 +78,7 @@ func (r *RedditClient) ResolveIdentifier(ctx context.Context, identifier string,
 	}
 	roomID, created, err := r.remote().CreateOrGetDM(ctx, match.UserID)
 	if err != nil {
-		return nil, wrapRedditRespError(err)
+		return nil, wrapRedditRespError(ctx, err)
 	}
 	portalKey := networkid.PortalKey{ID: makePortalID(roomID), Receiver: r.userLogin.ID}
 	resp.Chat = &bridgev2.CreateChatResponse{
@@ -103,7 +103,7 @@ func (r *RedditClient) SearchUsers(ctx context.Context, query string) ([]*bridge
 	query = strings.TrimSpace(query)
 	results, err := r.remote().SearchUsers(ctx, query)
 	if err != nil {
-		return nil, wrapRedditRespError(err)
+		return nil, wrapRedditRespError(ctx, err)
 	}
 	out := make([]*bridgev2.ResolveIdentifierResponse, 0, len(results.Results))
 	for _, hit := range results.Results {
@@ -136,7 +136,7 @@ func (r *RedditClient) CreateGroup(ctx context.Context, params *bridgev2.GroupCr
 	}
 	roomID, err := r.remote().CreateGroup(ctx, params.Name.Name, mxids)
 	if err != nil {
-		return nil, wrapRedditRespError(err)
+		return nil, wrapRedditRespError(ctx, err)
 	}
 	portalKey := networkid.PortalKey{ID: makePortalID(roomID)}
 	if r.main.Bridge.Config.SplitPortals {
