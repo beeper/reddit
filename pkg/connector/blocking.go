@@ -30,7 +30,7 @@ func (r *RedditClient) HandleMatrixBlockUser(ctx context.Context, msg *bridgev2.
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if err := r.session.SetUserBlocked(ctx, string(userID), msg.Content.Block); err != nil {
-		return err
+		return wrapRedditError(err)
 	}
 	r.blockMu.Lock()
 	if r.blockedUsers != nil {

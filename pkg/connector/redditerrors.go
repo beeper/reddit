@@ -1,10 +1,11 @@
 package connector
 
 import (
+	"context"
 	"errors"
-	"fmt"
 	"net/http"
 
+	"github.com/rs/zerolog"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/event"
@@ -67,20 +68,21 @@ func permanentFailure(reason event.MessageStatusReason, msg string) error {
 }
 
 // wrapRedditRespError maps a failed Reddit request to a provisioning error. The
-// original error stays in the chain for logs; only the RespError is written.
-func wrapRedditRespError(err error) error {
+// original error is logged and kept as the internal error.
+func wrapRedditRespError(ctx context.Context, err error) error {
+	zerolog.Ctx(ctx).Err(err).Msg("Reddit request failed")
 	var mapped bridgev2.RespError
 	switch classifyRedditError(err) {
 	case redditFailureRateLimited:
-		mapped = bridgev2.RespError(mautrix.MLimitExceeded.WithMessage("Reddit is rate limiting requests. Please try again later."))
+		mapped = bridgev2.RespError(mautrix.MLimitExceeded.WithMessage("Reddit is rate limiting requests. Please try again later.").WithStatus(http.StatusBadRequest))
 	case redditFailureUnauthorized:
-		mapped = bridgev2.RespError(mautrix.MUnknown.WithMessage("Reddit session expired. Please try again shortly.").WithStatus(http.StatusBadGateway))
+		mapped = bridgev2.RespError(mautrix.MUnknown.WithMessage("Reddit session expired. Please try again shortly."))
 	case redditFailureForbidden:
 		mapped = bridgev2.RespError(mautrix.MForbidden.WithMessage("Reddit doesn't allow this request."))
 	case redditFailureRejected:
 		mapped = bridgev2.RespError(mautrix.MUnknown.WithMessage("Reddit rejected the request.").WithStatus(http.StatusBadRequest))
 	default:
-		mapped = bridgev2.RespError(mautrix.MUnknown.WithMessage("Failed to reach Reddit. Please try again.").WithStatus(http.StatusBadGateway))
+		mapped = bridgev2.RespError(mautrix.MUnknown.WithMessage("Failed to reach Reddit. Please try again."))
 	}
-	return fmt.Errorf("%w: %w", mapped, err)
+	return mapped.WithInternalError(err)
 }
