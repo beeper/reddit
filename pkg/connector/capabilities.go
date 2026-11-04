@@ -75,11 +75,10 @@ var stateCaps = event.StateFeatureMap{
 
 func (r *RedditClient) GetCapabilities(ctx context.Context, portal *bridgev2.Portal) *event.RoomFeatures {
 	caps := (&event.RoomFeatures{
-		ID:                   "com.beeper.reddit.capabilities.v12",
+		ID:                   "com.beeper.reddit.capabilities.v13",
 		File:                 fileCaps,
 		MaxTextLength:        MaxTextLength,
 		LocationMessage:      event.CapLevelDropped,
-		Reply:                event.CapLevelFullySupported,
 		Thread:               event.CapLevelPartialSupport,
 		Edit:                 event.CapLevelRejected,
 		Delete:               event.CapLevelFullySupported,

@@ -26,24 +26,12 @@ func TestOutgoingThreadTranslationAndMissingMapping(t *testing.T) {
 	msg.ThreadRoot = &database.Message{ID: "$reddit-root", Room: msg.Portal.PortalKey}
 	msg.Content.RelatesTo = (&event.RelatesTo{}).SetThread("$beeper-root", "$beeper-target")
 	content, err := outgoingContent(msg)
-	if err != nil || content.RelatesTo.GetThreadParent() != "$reddit-root" || content.RelatesTo.GetReplyTo() != "$reddit-target" || !content.RelatesTo.IsFallingBack {
+	if err != nil || content.RelatesTo.GetThreadParent() != "$reddit-root" || content.RelatesTo.GetReplyTo() != "$reddit-root" || !content.RelatesTo.IsFallingBack {
 		t.Fatalf("thread/reply conversion failed: %v", err)
 	}
 	msg.ThreadRoot = nil
 	if _, err = outgoingContent(msg); err == nil {
 		t.Fatal("unmapped thread was flattened")
-	}
-}
-
-func TestReplyToThreadMessageKeepsNativeRoot(t *testing.T) {
-	msg := outgoingTestMessage()
-	msg.ReplyTo.ThreadRoot = "$existing-root"
-	content, err := outgoingContent(msg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if content.RelatesTo.GetThreadParent() != "$existing-root" || content.RelatesTo.GetReplyTo() != "$reddit-target" || !content.RelatesTo.IsFallingBack {
-		t.Fatal("reply created a nested thread instead of retaining the native root")
 	}
 }
 
