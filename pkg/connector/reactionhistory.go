@@ -83,14 +83,11 @@ func (r *RedditClient) backfillReactions(ctx context.Context, key networkid.Port
 			continue
 		}
 		seen[identity] = evt.ID
-		emoji, shortcode, err := r.reactionEmoji(ctx, key)
+		emoji, _, err := r.reactionEmoji(ctx, key)
 		if err != nil {
 			return nil, err
 		}
 		reaction := &bridgev2.BackfillReaction{Sender: r.makeSender(evt.Sender), EmojiID: networkid.EmojiID(key), Emoji: emoji, Timestamp: time.UnixMilli(evt.Timestamp), DBMetadata: &ReactionMetadata{RemoteEventID: evt.ID}}
-		if shortcode != "" {
-			reaction.ExtraContent = map[string]any{"com.beeper.reaction.shortcode": shortcode}
-		}
 		reactions = append(reactions, reaction)
 	}
 	return reactions, nil

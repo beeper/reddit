@@ -103,6 +103,48 @@ func (r *RedditClient) reactionImage(ctx context.Context, key string) (string, s
 	return mxc, ":" + asset.Name + ":", nil
 }
 
+// Rooms advertise Reddit's own reaction images, so clients offer and show the
+// same images as Reddit. Until every image resolves to a Matrix media URI, rooms
+// keep the Unicode aliases. Resolving can download and upload all images once,
+// so it never runs inline with capability checks.
+func (r *RedditClient) allowedReactionImages() []string {
+	rc := r.main
+	rc.reactionImagesMu.Lock()
+	defer rc.reactionImagesMu.Unlock()
+	if rc.reactionImages == nil && !rc.reactionImagesLoading && time.Now().After(rc.reactionImagesRetryAt) && rc.Bridge.BackgroundCtx != nil {
+		rc.reactionImagesLoading = true
+		go r.loadReactionImages()
+	}
+	return rc.reactionImages
+}
+
+func (r *RedditClient) loadReactionImages() {
+	rc := r.main
+	log := rc.Bridge.Log.With().Str("action", "load reaction images").Logger()
+	ctx := log.WithContext(rc.Bridge.BackgroundCtx)
+	assets := redditchat.ReactionAssets()
+	images := make([]string, 0, len(assets))
+	for _, asset := range assets {
+		uri, _, err := r.reactionImage(ctx, asset.Key)
+		if err == nil && !strings.HasPrefix(uri, "mxc://") && !strings.HasPrefix(uri, "localmxc://") {
+			err = fmt.Errorf("unsupported reaction image URI %q", uri)
+		}
+		if err != nil {
+			log.Warn().Err(err).Str("reaction", asset.Name).Msg("Failed to resolve Reddit reaction image, keeping Unicode allowed reactions")
+			images = nil
+			break
+		}
+		images = append(images, uri)
+	}
+	rc.reactionImagesMu.Lock()
+	defer rc.reactionImagesMu.Unlock()
+	rc.reactionImages = images
+	rc.reactionImagesLoading = false
+	if images == nil {
+		rc.reactionImagesRetryAt = time.Now().Add(time.Hour)
+	}
+}
+
 // A reaction image that can never be fetched falls back to text.
 func (r *RedditClient) reactionEmoji(ctx context.Context, key string) (string, string, error) {
 	emoji, shortcode, err := r.reactionImage(ctx, key)

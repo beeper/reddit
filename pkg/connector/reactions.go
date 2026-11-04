@@ -16,7 +16,7 @@ func (r *RedditClient) convertReaction(ctx context.Context, key networkid.Portal
 	if !ok || content.RelatesTo.EventID == "" || content.RelatesTo.Type != event.RelAnnotation || content.RelatesTo.Key == "" {
 		return nil, unbridgeable(errors.New("reaction is missing its target"))
 	}
-	emoji, shortcode, err := r.reactionEmoji(ctx, content.RelatesTo.Key)
+	emoji, _, err := r.reactionEmoji(ctx, content.RelatesTo.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -28,9 +28,6 @@ func (r *RedditClient) convertReaction(ctx context.Context, key networkid.Portal
 		ReactionDBMeta: &ReactionMetadata{RemoteEventID: evt.ID},
 		EmojiID:        networkid.EmojiID(content.RelatesTo.Key), Emoji: emoji,
 		TargetMessage: makeMessageID(content.RelatesTo.EventID),
-	}
-	if shortcode != "" {
-		reaction.ExtraContent = map[string]any{"com.beeper.reaction.shortcode": shortcode}
 	}
 	return reaction, nil
 }

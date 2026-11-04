@@ -75,7 +75,7 @@ var stateCaps = event.StateFeatureMap{
 
 func (r *RedditClient) GetCapabilities(ctx context.Context, portal *bridgev2.Portal) *event.RoomFeatures {
 	caps := (&event.RoomFeatures{
-		ID:                   "com.beeper.reddit.capabilities.v12",
+		ID:                   "com.beeper.reddit.capabilities.v13",
 		File:                 fileCaps,
 		MaxTextLength:        MaxTextLength,
 		LocationMessage:      event.CapLevelDropped,
@@ -101,6 +101,10 @@ func (r *RedditClient) GetCapabilities(ctx context.Context, portal *bridgev2.Por
 			event.MemberActionKick:   event.CapLevelFullySupported,
 		},
 	}).Clone()
+	if images := r.allowedReactionImages(); images != nil {
+		caps.ID += ".images"
+		caps.AllowedReactions = slices.Clone(images)
+	}
 	if portal != nil && portal.RoomType == database.RoomTypeDM {
 		caps.ID += ".dm"
 		if r.session != nil {
