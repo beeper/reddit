@@ -437,7 +437,7 @@ func (r *RedditClient) queueMessage(ctx context.Context, key networkid.PortalKey
 		EventMeta: simplevent.EventMeta{
 			Type: bridgev2.RemoteEventMessage, PortalKey: key,
 			Sender: r.makeSender(evt.Sender), CreatePortal: true,
-			Timestamp: time.UnixMilli(evt.Timestamp),
+			Timestamp: time.UnixMilli(evt.Timestamp), StreamOrder: evt.Timestamp,
 		},
 		ID: makeMessageID(evt.ID), TransactionID: networkid.TransactionID(evt.Unsigned.TransactionID),
 		Data: evt, ConvertMessageFunc: r.convertMessage,

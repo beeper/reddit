@@ -141,7 +141,7 @@ func (r *RedditClient) FetchMessages(ctx context.Context, params bridgev2.FetchM
 					return nil, err
 				}
 			}
-			result.Messages = append(result.Messages, &bridgev2.BackfillMessage{ConvertedMessage: converted, ID: makeMessageID(evt.ID), Sender: r.makeSender(evt.Sender), Timestamp: time.UnixMilli(evt.Timestamp), Reactions: reactions})
+			result.Messages = append(result.Messages, &bridgev2.BackfillMessage{ConvertedMessage: converted, ID: makeMessageID(evt.ID), Sender: r.makeSender(evt.Sender), Timestamp: time.UnixMilli(evt.Timestamp), StreamOrder: evt.Timestamp, Reactions: reactions})
 		}
 		result.Cursor = networkid.PaginationCursor(page.End)
 		result.HasMore = page.End != ""
@@ -172,6 +172,6 @@ func (r *RedditClient) historyPlaceholder(ctx context.Context, evt *event.Event,
 			Content: &event.MessageEventContent{MsgType: event.MsgNotice, Body: "An error occurred while processing an incoming message", Mentions: &event.Mentions{}},
 			Extra:   map[string]any{"fi.mau.bridge.internal_error": err.Error()},
 		}}},
-		ID: makeMessageID(evt.ID), Sender: r.makeSender(evt.Sender), Timestamp: time.UnixMilli(evt.Timestamp),
+		ID: makeMessageID(evt.ID), Sender: r.makeSender(evt.Sender), Timestamp: time.UnixMilli(evt.Timestamp), StreamOrder: evt.Timestamp,
 	}
 }
