@@ -9,6 +9,8 @@ import (
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/id"
 	"maunium.net/go/mautrix/mediaproxy"
+
+	"github.com/beeper/reddit/pkg/redditchat"
 )
 
 var _ bridgev2.DirectMediableNetwork = (*RedditConnector)(nil)
@@ -25,7 +27,28 @@ func (r *RedditClient) directMediaURI(ctx context.Context, uri id.ContentURIStri
 	return r.main.Bridge.Matrix.GenerateContentURI(ctx, networkid.MediaID("1\x00"+string(r.userLogin.ID)+"\x00"+parsed.FileID))
 }
 
+func reactionMediaID(key string) networkid.MediaID {
+	return networkid.MediaID("2\x00" + key)
+}
+
+func reactionKeyFromMediaID(mediaID networkid.MediaID) (string, bool) {
+	key, ok := strings.CutPrefix(string(mediaID), "2\x00")
+	if !ok {
+		return "", false
+	}
+	_, known := redditchat.ReactionAssetByKey(key)
+	return key, known
+}
+
 func (rc *RedditConnector) Download(ctx context.Context, mediaID networkid.MediaID, _ map[string]string) (mediaproxy.GetMediaResponse, error) {
+	if key, ok := reactionKeyFromMediaID(mediaID); ok {
+		asset, _ := redditchat.ReactionAssetByKey(key)
+		data, _, err := downloadReactionAsset(ctx, asset)
+		if err != nil {
+			return nil, err
+		}
+		return mediaproxy.GetMediaResponseRawData(data), nil
+	}
 	parts := strings.Split(string(mediaID), "\x00")
 	if len(parts) != 3 || parts[0] != "1" || parts[1] == "" || parts[2] == "" {
 		return nil, mediaproxy.ErrInvalidMediaIDSyntax

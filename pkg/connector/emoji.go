@@ -53,37 +53,52 @@ var reactionHTTPClient = &http.Client{
 	},
 }
 
+func downloadReactionAsset(ctx context.Context, asset redditchat.ReactionAsset) ([]byte, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://i.redd.it/"+asset.Key, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	resp, err := reactionHTTPClient.Do(req)
+	if err != nil {
+		return nil, "", mediaError(ctx, "Reddit reaction download", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		err = fmt.Errorf("reddit reaction image is unavailable (HTTP %d)", resp.StatusCode)
+		if isGoneStatus(resp.StatusCode) {
+			err = unbridgeable(err)
+		}
+		return nil, "", err
+	}
+	data, err := readMediaBounded(resp.Body, 2*1024*1024)
+	if err != nil {
+		return nil, "", err
+	}
+	mime, err := imageMIME(data)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, mime, nil
+}
+
 func (r *RedditClient) reactionImage(ctx context.Context, key string) (string, string, error) {
 	asset, known := redditchat.ReactionAssetByKey(key)
 	if !known {
 		// Preserve unknown future keys visibly, without fetching arbitrary URLs.
 		return key, "", nil
 	}
+	if r.main.directMedia {
+		uri, err := r.main.Bridge.Matrix.GenerateContentURI(ctx, reactionMediaID(asset.Key))
+		if err != nil {
+			return "", "", err
+		}
+		return string(uri), ":" + asset.Name + ":", nil
+	}
 	r.main.emojiMu.Lock()
 	defer r.main.emojiMu.Unlock()
 	mxc := r.main.Bridge.DB.KV.Get(ctx, database.Key("reddit_emoji_v1/key/"+key))
 	if mxc == "" {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://i.redd.it/"+asset.Key, nil)
-		if err != nil {
-			return "", "", err
-		}
-		resp, err := reactionHTTPClient.Do(req)
-		if err != nil {
-			return "", "", mediaError(ctx, "Reddit reaction download", err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			err = fmt.Errorf("reddit reaction image is unavailable (HTTP %d)", resp.StatusCode)
-			if isGoneStatus(resp.StatusCode) {
-				err = unbridgeable(err)
-			}
-			return "", "", err
-		}
-		data, err := readMediaBounded(resp.Body, 2*1024*1024)
-		if err != nil {
-			return "", "", err
-		}
-		mime, err := imageMIME(data)
+		data, mime, err := downloadReactionAsset(ctx, asset)
 		if err != nil {
 			return "", "", err
 		}
@@ -120,6 +135,13 @@ func (r *RedditClient) reactionEmoji(ctx context.Context, key string) (string, s
 }
 
 func (r *RedditClient) resolveOutgoingReaction(ctx context.Context, value string) (string, error) {
+	if r.main.directMedia {
+		if mediaID, err := r.main.Bridge.Matrix.ParseContentURI(ctx, id.ContentURIString(value)); err == nil {
+			if key, ok := reactionKeyFromMediaID(mediaID); ok {
+				return key, nil
+			}
+		}
+	}
 	if strings.HasPrefix(value, "mxc://") {
 		key := r.main.Bridge.DB.KV.Get(ctx, database.Key("reddit_emoji_v1/mxc/"+value))
 		if _, ok := redditchat.ReactionAssetByKey(key); ok {
