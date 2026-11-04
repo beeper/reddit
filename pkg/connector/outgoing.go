@@ -62,25 +62,10 @@ func outgoingContent(msg *bridgev2.MatrixMessage) (*event.MessageEventContent, e
 		}
 	} else if msg.Content.RelatesTo.GetThreadParent() != "" {
 		return nil, errors.New("thread root has not been mapped to Reddit")
-	}
-	if msg.ReplyTo != nil {
-		target, err := mappedTarget(msg.Portal, msg.ReplyTo)
-		if err != nil {
-			return nil, err
-		}
-		if root == "" {
-			root = target
-			if msg.ReplyTo.ThreadRoot != "" {
-				root = messageIDToEventID(msg.ReplyTo.ThreadRoot)
-			}
-		}
-		// Reddit rejects a bare m.in_reply_to. Its native Reply in thread
-		// action sends m.thread with a fallback reply, including for the
-		// first response to a top-level message.
-		content.RelatesTo = (&event.RelatesTo{}).SetThread(root, target)
-	} else if msg.Content.RelatesTo.GetNonFallbackReplyTo() != "" {
+	} else if msg.Content.RelatesTo.GetReplyTo() != "" {
 		return nil, errors.New("reply target has not been mapped to Reddit")
-	} else if root != "" {
+	}
+	if root != "" {
 		content.RelatesTo = (&event.RelatesTo{}).SetThread(root, root)
 	}
 	return &content, nil
