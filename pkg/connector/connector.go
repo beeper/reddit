@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"maunium.net/go/mautrix/bridgev2"
@@ -19,6 +20,11 @@ type RedditConnector struct {
 	mediaUploadLimit atomic.Int64
 	emojiMu          sync.Mutex
 	directMedia      bool
+
+	reactionImagesMu      sync.Mutex
+	reactionImages        []string
+	reactionImagesLoading bool
+	reactionImagesRetryAt time.Time
 }
 
 var (

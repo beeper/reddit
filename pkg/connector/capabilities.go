@@ -100,6 +100,10 @@ func (r *RedditClient) GetCapabilities(ctx context.Context, portal *bridgev2.Por
 			event.MemberActionKick:   event.CapLevelFullySupported,
 		},
 	}).Clone()
+	if images := r.allowedReactionImages(ctx); images != nil {
+		caps.ID += ".images"
+		caps.AllowedReactions = slices.Clone(images)
+	}
 	if portal != nil && portal.RoomType == database.RoomTypeDM {
 		caps.ID += ".dm"
 		if r.session != nil {
