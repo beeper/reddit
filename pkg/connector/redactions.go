@@ -15,8 +15,12 @@ import (
 )
 
 func validateNativeEvent(key networkid.PortalKey, evt *event.Event) error {
-	if evt == nil || evt.ID == "" || (evt.RoomID != "" && makePortalID(evt.RoomID) != key.ID) {
-		return errors.New("reddit event has an invalid room or event identity")
+	if evt == nil {
+		return errors.New("reddit event is missing")
+	} else if evt.ID == "" {
+		return errors.New("reddit event has no event ID")
+	} else if evt.RoomID != "" && makePortalID(evt.RoomID) != key.ID {
+		return errors.New("reddit event belongs to another room")
 	}
 	local, server, err := evt.Sender.Parse()
 	if err != nil || server != "reddit.com" || !strings.HasPrefix(local, "t2_") || len(local) <= 3 {

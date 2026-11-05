@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/rs/zerolog"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/event"
@@ -21,7 +22,7 @@ func (r *RedditClient) convertMessage(ctx context.Context, portal *bridgev2.Port
 			return nil, errors.New("deleted message requires a portal")
 		}
 		if err := validateTombstone(portal.PortalKey, src); err != nil {
-			return nil, unbridgeable(err)
+			zerolog.Ctx(ctx).Warn().Err(err).Stringer("event_id", src.ID).Msg("Reddit deletion proof failed validation, hiding deleted message")
 		}
 		return &bridgev2.ConvertedMessage{Parts: []*bridgev2.ConvertedMessagePart{{
 			ID: "", Type: event.EventMessage, Content: &event.MessageEventContent{}, DontBridge: true,
