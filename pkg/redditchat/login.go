@@ -501,10 +501,43 @@ func checkLoginResponseBody(body []byte, rejected error) error {
 type LoginHTTPError struct {
 	Operation  string
 	StatusCode int
+	Reason     string
 }
 
 func (e *LoginHTTPError) Error() string {
+	if e.Reason != "" {
+		return fmt.Sprintf("reddit login: %s request failed: status=%d reason=%s", e.Operation, e.StatusCode, e.Reason)
+	}
 	return fmt.Sprintf("reddit login: %s request failed: status=%d", e.Operation, e.StatusCode)
+}
+
+var redditReasonCode = regexp.MustCompile(`^[A-Z][A-Z0-9_]{1,63}$`)
+
+func redditErrorReason(body []byte) string {
+	var parsed struct {
+		Reason json.RawMessage `json:"reason"`
+		Error  json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(body, &parsed) != nil {
+		return ""
+	}
+	for _, raw := range []json.RawMessage{parsed.Reason, parsed.Error} {
+		var code string
+		if json.Unmarshal(raw, &code) != nil {
+			var nested struct {
+				Reason string `json:"reason"`
+				Code   string `json:"code"`
+			}
+			if json.Unmarshal(raw, &nested) != nil {
+				continue
+			}
+			code = firstNonEmpty(nested.Reason, nested.Code)
+		}
+		if redditReasonCode.MatchString(code) {
+			return code
+		}
+	}
+	return ""
 }
 
 func redditStatusError(resp *http.Response, body []byte) error {
@@ -523,7 +556,7 @@ func redditStatusError(resp *http.Response, body []byte) error {
 			operation = "verification setup"
 		}
 	}
-	return &LoginHTTPError{Operation: operation, StatusCode: resp.StatusCode}
+	return &LoginHTTPError{Operation: operation, StatusCode: resp.StatusCode, Reason: redditErrorReason(body)}
 }
 
 func findFirst(text string, patterns ...string) string {
