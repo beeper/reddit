@@ -25,6 +25,8 @@ const syncRateLimitGrace = time.Minute
 
 const maxSyncRetryDelay = 5 * time.Minute
 
+const maxRejectedRefreshes = 5
+
 func syncRetryDelay(minDelay time.Duration, failures int) time.Duration {
 	delay := min(minDelay<<min(failures, 10), maxSyncRetryDelay)
 	return max(minDelay, delay/2+rand.N(delay/2+1))
@@ -49,7 +51,7 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 	timeoutMS := r.main.Config.PollTimeoutMS()
 	minBackoff := time.Duration(r.main.Config.ErrorBackoffSeconds()) * time.Second
 	var nextBlockSync, rateLimitedSince time.Time
-	var failures int
+	var failures, rejectedRefreshes int
 	var refreshed bool
 	backOff := func() bool {
 		failures++
@@ -108,6 +110,12 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 				if ctx.Err() != nil {
 					return
 				}
+				if refreshErr == nil {
+					rejectedRefreshes++
+					if rejectedRefreshes >= maxRejectedRefreshes {
+						refreshErr = errRefreshedTokenRejected
+					}
+				}
 				if refreshNeedsLogin(refreshErr) {
 					log.Warn().Err(refreshErr).Msg("Reddit session requires reauthentication")
 					message := "Reddit session expired. Please sign in again."
@@ -126,7 +134,7 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 				}
 				// Provider outages, edge blocks, rate limits and local save failures
 				// retain the existing session and retry through the native poll loop.
-				// A refreshed token that is still rejected retries the same way.
+				// A refreshed token that is still rejected retries the same way, up to maxRejectedRefreshes.
 				if refreshErr != nil {
 					err = refreshErr
 				}
@@ -143,7 +151,7 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 			}
 			continue
 		}
-		refreshed = false
+		refreshed, rejectedRefreshes = false, 0
 
 		err = r.handleSync(ctx, resp, &roomSnapshots{}, since != "")
 		if err != nil {

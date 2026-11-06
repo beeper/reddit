@@ -184,6 +184,8 @@ func (r *RedditClient) saveMeta(ctx context.Context) error {
 
 var errRefreshAccountMismatch = errors.New("reddit session belongs to a different account; sign in again with the original account")
 
+var errRefreshedTokenRejected = errors.New("reddit chat server keeps rejecting freshly minted chat tokens")
+
 // refreshChatToken re-mints the Reddit Matrix access token using the saved
 // Reddit session cookies. Called on 401 from the Matrix homeserver.
 func (r *RedditClient) refreshChatToken(ctx context.Context) error {
@@ -222,7 +224,7 @@ func (r *RedditClient) refreshChatToken(ctx context.Context) error {
 
 func refreshNeedsLogin(err error) bool {
 	var httpErr *redditchat.LoginHTTPError
-	return errors.Is(err, redditchat.ErrSessionUnavailable) || errors.Is(err, errRefreshAccountMismatch) ||
+	return errors.Is(err, redditchat.ErrSessionUnavailable) || errors.Is(err, errRefreshAccountMismatch) || errors.Is(err, errRefreshedTokenRejected) ||
 		(errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusUnauthorized)
 }
 
