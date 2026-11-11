@@ -502,16 +502,56 @@ type LoginHTTPError struct {
 	Operation  string
 	StatusCode int
 	Reason     string
+	Field      string
+	AlertLevel string
 }
 
 func (e *LoginHTTPError) Error() string {
+	var details strings.Builder
 	if e.Reason != "" {
-		return fmt.Sprintf("reddit login: %s request failed: status=%d reason=%s", e.Operation, e.StatusCode, e.Reason)
+		details.WriteString(" reason=" + e.Reason)
 	}
-	return fmt.Sprintf("reddit login: %s request failed: status=%d", e.Operation, e.StatusCode)
+	if e.Field != "" {
+		details.WriteString(" field=" + e.Field)
+	}
+	if e.AlertLevel != "" {
+		details.WriteString(" alert_level=" + e.AlertLevel)
+	}
+	return fmt.Sprintf("reddit login: %s request failed: status=%d%s", e.Operation, e.StatusCode, details.String())
 }
 
-var redditReasonCode = regexp.MustCompile(`^[A-Z][A-Z0-9_]{1,63}$`)
+var (
+	redditReasonCode     = regexp.MustCompile(`^[A-Z][A-Z0-9_]{1,63}$`)
+	redditAlertTag       = regexp.MustCompile(`<faceplate-alert\b[^>]*>`)
+	redditAlertAttribute = regexp.MustCompile(`\s([a-z-]+)="([^"]*)"`)
+	redditAlertCode      = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+	redditAlertLevel     = regexp.MustCompile(`^[0-9]$`)
+)
+
+func redditAlertDetails(body []byte) (cause, field, level string) {
+	tag := redditAlertTag.Find(body)
+	if tag == nil {
+		return
+	}
+	for _, attr := range redditAlertAttribute.FindAllSubmatch(tag, -1) {
+		value := string(attr[2])
+		switch string(attr[1]) {
+		case "cause":
+			if redditAlertCode.MatchString(value) {
+				cause = value
+			}
+		case "name":
+			if redditAlertCode.MatchString(value) {
+				field = value
+			}
+		case "level":
+			if redditAlertLevel.MatchString(value) {
+				level = value
+			}
+		}
+	}
+	return
+}
 
 func redditErrorReason(body []byte) string {
 	var parsed struct {
@@ -556,7 +596,14 @@ func redditStatusError(resp *http.Response, body []byte) error {
 			operation = "verification setup"
 		}
 	}
-	return &LoginHTTPError{Operation: operation, StatusCode: resp.StatusCode, Reason: redditErrorReason(body)}
+	cause, field, level := redditAlertDetails(body)
+	return &LoginHTTPError{
+		Operation:  operation,
+		StatusCode: resp.StatusCode,
+		Reason:     firstNonEmpty(redditErrorReason(body), cause),
+		Field:      field,
+		AlertLevel: level,
+	}
 }
 
 func findFirst(text string, patterns ...string) string {
