@@ -251,7 +251,11 @@ func skipUnbridgeable(ctx context.Context, err error, roomID id.RoomID, eventID 
 	if !isUnbridgeable(err) {
 		return err
 	}
-	zerolog.Ctx(ctx).Warn().Err(err).Stringer("room_id", roomID).Stringer("event_id", eventID).Msg("Skipping unbridgeable Reddit data")
+	level := zerolog.WarnLevel
+	if errors.Is(err, errKnownUnsupportedChatType) {
+		level = zerolog.DebugLevel
+	}
+	zerolog.Ctx(ctx).WithLevel(level).Err(err).Stringer("room_id", roomID).Stringer("event_id", eventID).Msg("Skipping unbridgeable Reddit data")
 	return nil
 }
 

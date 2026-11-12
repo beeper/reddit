@@ -34,7 +34,15 @@ type RoomMember struct {
 	Membership event.Membership `json:"membership"`
 }
 
-var errMissingChatType = errors.New("reddit sync is missing chat type; refusing to guess a recipient")
+var (
+	errMissingChatType          = errors.New("reddit sync is missing chat type; refusing to guess a recipient")
+	errUnsupportedChatType      = errors.New("unsupported Reddit chat type")
+	errKnownUnsupportedChatType = errors.New("known unsupported Reddit chat type")
+)
+
+func isSupportedChatType(chatType string) bool {
+	return chatType == "direct" || chatType == "private_group"
+}
 
 func mergeRoomState(previous *RoomState, joined *mautrix.SyncJoinedRoom) (*RoomState, error) {
 	next := &RoomState{Members: make(map[id.UserID]RoomMember)}
@@ -65,9 +73,6 @@ func mergeRoomState(previous *RoomState, joined *mautrix.SyncJoinedRoom) (*RoomS
 				}
 				if err = json.Unmarshal(data, &content); err != nil {
 					return nil, err
-				}
-				if content.Type != "direct" && content.Type != "private_group" {
-					return nil, errors.New("unsupported Reddit chat type")
 				}
 				if next.Type != "" && next.Type != content.Type {
 					return nil, errors.New("reddit chat type changed; portal migration required")
@@ -124,6 +129,31 @@ func mergeRoomState(previous *RoomState, joined *mautrix.SyncJoinedRoom) (*RoomS
 	return next, nil
 }
 
+func chatTypeChanged(current string, joined *mautrix.SyncJoinedRoom) bool {
+	lists := [][]*event.Event{joined.State.Events, joined.Timeline.Events}
+	if joined.StateAfter != nil {
+		lists = append(lists, joined.StateAfter.Events)
+	}
+	for _, list := range lists {
+		for _, evt := range list {
+			if evt == nil || evt.StateKey == nil || evt.Type.Type != "com.reddit.chat.type" {
+				continue
+			}
+			data, err := json.Marshal(&evt.Content)
+			if err != nil {
+				continue
+			}
+			var content struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(data, &content) == nil && content.Type != current {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (r *RedditClient) roomState(ctx context.Context, roomID id.RoomID, joined *mautrix.SyncJoinedRoom) (*RoomState, networkid.PortalKey, error) {
 	r.roomMu.Lock()
 	defer r.roomMu.Unlock()
@@ -131,6 +161,13 @@ func (r *RedditClient) roomState(ctx context.Context, roomID id.RoomID, joined *
 		r.rooms = make(map[id.RoomID]*RoomState)
 	}
 	previous := r.rooms[roomID]
+	if previous != nil && previous.Type != "" && !isSupportedChatType(previous.Type) {
+		if !chatTypeChanged(previous.Type, joined) {
+			return nil, networkid.PortalKey{}, unbridgeable(errKnownUnsupportedChatType)
+		}
+		delete(r.rooms, roomID)
+		previous = nil
+	}
 	existing, err := r.savedRoomPortal(ctx, roomID)
 	if err != nil {
 		return nil, networkid.PortalKey{}, err
@@ -148,6 +185,9 @@ func (r *RedditClient) roomState(ctx context.Context, roomID id.RoomID, joined *
 		// Reddit can send a new chat's members before its type.
 		r.rooms[roomID] = next
 		return nil, networkid.PortalKey{}, unbridgeable(errMissingChatType)
+	} else if !isSupportedChatType(next.Type) {
+		r.rooms[roomID] = &RoomState{Type: next.Type}
+		return nil, networkid.PortalKey{}, unbridgeable(fmt.Errorf("%w %q", errUnsupportedChatType, next.Type))
 	}
 	key := r.makePortalKey(roomID, next.Type == "direct")
 	if existing != nil && existing.PortalKey != key {
