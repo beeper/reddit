@@ -129,6 +129,31 @@ func mergeRoomState(previous *RoomState, joined *mautrix.SyncJoinedRoom) (*RoomS
 	return next, nil
 }
 
+func chatTypeChanged(current string, joined *mautrix.SyncJoinedRoom) bool {
+	lists := [][]*event.Event{joined.State.Events, joined.Timeline.Events}
+	if joined.StateAfter != nil {
+		lists = append(lists, joined.StateAfter.Events)
+	}
+	for _, list := range lists {
+		for _, evt := range list {
+			if evt == nil || evt.StateKey == nil || evt.Type.Type != "com.reddit.chat.type" {
+				continue
+			}
+			data, err := json.Marshal(&evt.Content)
+			if err != nil {
+				continue
+			}
+			var content struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(data, &content) == nil && content.Type != current {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (r *RedditClient) roomState(ctx context.Context, roomID id.RoomID, joined *mautrix.SyncJoinedRoom) (*RoomState, networkid.PortalKey, error) {
 	r.roomMu.Lock()
 	defer r.roomMu.Unlock()
@@ -137,7 +162,11 @@ func (r *RedditClient) roomState(ctx context.Context, roomID id.RoomID, joined *
 	}
 	previous := r.rooms[roomID]
 	if previous != nil && previous.Type != "" && !isSupportedChatType(previous.Type) {
-		return nil, networkid.PortalKey{}, unbridgeable(errKnownUnsupportedChatType)
+		if !chatTypeChanged(previous.Type, joined) {
+			return nil, networkid.PortalKey{}, unbridgeable(errKnownUnsupportedChatType)
+		}
+		delete(r.rooms, roomID)
+		previous = nil
 	}
 	existing, err := r.savedRoomPortal(ctx, roomID)
 	if err != nil {
