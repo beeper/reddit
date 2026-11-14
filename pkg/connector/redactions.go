@@ -61,7 +61,7 @@ func validateTombstone(key networkid.PortalKey, target *event.Event) error {
 	if err != nil || removedID != target.ID {
 		return errors.New("reddit deletion proof belongs to another event")
 	}
-	if target.Type != event.EventMessage && target.Type != event.EventReaction {
+	if target.Type != event.EventMessage && target.Type != event.EventSticker && target.Type != event.EventReaction {
 		return errors.New("unsupported deleted Reddit event type")
 	}
 	return nil
@@ -106,7 +106,7 @@ func (r *RedditClient) convertDeletedEvent(key networkid.PortalKey, target *even
 	}
 	removal := target.Unsigned.RedactedBecause
 	meta := simplevent.EventMeta{PortalKey: key, Sender: r.makeSender(removal.Sender), Timestamp: time.UnixMilli(removal.Timestamp)}
-	if target.Type == event.EventMessage {
+	if target.Type == event.EventMessage || target.Type == event.EventSticker {
 		meta.Type = bridgev2.RemoteEventMessageRemove
 		return &simplevent.MessageRemove{EventMeta: meta, TargetMessage: makeMessageID(target.ID)}, nil
 	}

@@ -197,17 +197,26 @@ func (r *RedditClient) resolveOutgoingReaction(ctx context.Context, value string
 
 var _ bridgev2.StickerImportingNetworkAPI = (*RedditClient)(nil)
 
-const reactionPackURL = "https://www.reddit.com/chat/"
+const (
+	reactionPackURL     = "https://www.reddit.com/chat/"
+	stickerPackURL      = "https://www.reddit.com/chat/stickers"
+	redditStickerPrefix = "mxc://reddit.com/sticker_"
+)
 
 func redditReactionPack() *event.ImagePackMetadata {
 	return &event.ImagePackMetadata{DisplayName: "Reddit reactions", Usage: []event.ImagePackUsage{event.ImagePackUsageEmoji}, BridgedPack: &event.BridgedStickerPack{Network: "reddit", URL: reactionPackURL}}
 }
+func redditStickerPack() *event.ImagePackMetadata {
+	return &event.ImagePackMetadata{DisplayName: "Reddit stickers", Usage: []event.ImagePackUsage{event.ImagePackUsageSticker}, BridgedPack: &event.BridgedStickerPack{Network: "reddit", URL: stickerPackURL}}
+}
 func (r *RedditClient) ListImagePacks(ctx context.Context) ([]*event.ImagePackMetadata, error) {
-	return []*event.ImagePackMetadata{redditReactionPack()}, nil
+	return []*event.ImagePackMetadata{redditReactionPack(), redditStickerPack()}, nil
 }
 func (r *RedditClient) DownloadImagePack(ctx context.Context, packURL string) (*bridgev2.ImportedImagePack, error) {
-	if packURL != reactionPackURL {
-		return nil, errors.New("unknown Reddit reaction pack")
+	if packURL == stickerPackURL {
+		return r.downloadStickerPack(ctx)
+	} else if packURL != reactionPackURL {
+		return nil, errors.New("unknown Reddit image pack")
 	}
 	images := make(map[string]*event.ImagePackImage)
 	for _, asset := range redditchat.ReactionAssets() {
@@ -218,4 +227,38 @@ func (r *RedditClient) DownloadImagePack(ctx context.Context, packURL string) (*
 		images[asset.Name] = &event.ImagePackImage{URL: id.ContentURIString(mxc)}
 	}
 	return &bridgev2.ImportedImagePack{Shortcode: "reddit-reactions", Content: &event.ImagePackEventContent{Images: images, Metadata: *redditReactionPack()}}, nil
+}
+
+func (r *RedditClient) downloadStickerPack(ctx context.Context) (*bridgev2.ImportedImagePack, error) {
+	stickers, err := r.remote().Stickers(ctx)
+	if err != nil {
+		return nil, wrapRedditError(err)
+	}
+	images := make(map[string]*event.ImagePackImage, len(stickers))
+	for _, sticker := range stickers {
+		cacheKey := database.Key("stickercache:" + string(sticker.URL))
+		mxc := r.main.Bridge.DB.KV.Get(ctx, cacheKey)
+		if mxc == "" {
+			data, err := r.downloadRedditMedia(ctx, sticker.URL, nil)
+			if err != nil {
+				return nil, err
+			}
+			mime, err := imageMIME(data)
+			if err != nil {
+				return nil, err
+			}
+			uri, file, err := r.main.Bridge.Bot.UploadMedia(ctx, "", data, sticker.Key, mime)
+			if err != nil {
+				return nil, mediaError(ctx, "Beeper sticker upload", err)
+			} else if file != nil || uri == "" {
+				return nil, errors.New("sticker upload did not return a public media URI")
+			}
+			mxc = string(uri)
+			r.main.Bridge.DB.KV.Set(ctx, cacheKey, mxc)
+		}
+		images[sticker.Key] = &event.ImagePackImage{URL: id.ContentURIString(mxc), Info: &event.FileInfo{
+			BridgedSticker: &event.BridgedSticker{Network: "reddit", ID: sticker.Key, PackURL: stickerPackURL},
+		}}
+	}
+	return &bridgev2.ImportedImagePack{Shortcode: "reddit-stickers", Content: &event.ImagePackEventContent{Images: images, Metadata: *redditStickerPack()}}, nil
 }
