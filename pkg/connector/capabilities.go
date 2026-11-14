@@ -37,19 +37,25 @@ const (
 	MaxFileSize   = 20 * 1024 * 1024
 )
 
+var imageMIMETypes = map[string]event.CapabilitySupportLevel{
+	"image/gif":  event.CapLevelFullySupported,
+	"image/jpeg": event.CapLevelFullySupported,
+	"image/png":  event.CapLevelFullySupported,
+	"image/webp": event.CapLevelFullySupported,
+}
+
 var fileCaps = event.FileFeatureMap{
+	event.CapMsgSticker: {
+		MimeTypes: imageMIMETypes,
+		MaxSize:   MaxFileSize,
+	},
 	event.CapMsgGIF: {
 		MimeTypes: map[string]event.CapabilitySupportLevel{"image/gif": event.CapLevelFullySupported},
 		Caption:   event.CapLevelRejected,
 		MaxSize:   MaxFileSize,
 	},
 	event.MsgImage: {
-		MimeTypes: map[string]event.CapabilitySupportLevel{
-			"image/gif":  event.CapLevelFullySupported,
-			"image/jpeg": event.CapLevelFullySupported,
-			"image/png":  event.CapLevelFullySupported,
-			"image/webp": event.CapLevelFullySupported,
-		},
+		MimeTypes: imageMIMETypes,
 		// Reddit keeps the body as image alt text, but does not show captions.
 		// Its own composer sends accompanying text as a separate message.
 		Caption: event.CapLevelRejected,
@@ -75,7 +81,7 @@ var stateCaps = event.StateFeatureMap{
 
 func (r *RedditClient) GetCapabilities(ctx context.Context, portal *bridgev2.Portal) *event.RoomFeatures {
 	caps := (&event.RoomFeatures{
-		ID:                   "com.beeper.reddit.capabilities.v13",
+		ID:                   "com.beeper.reddit.capabilities.v14",
 		File:                 fileCaps,
 		MaxTextLength:        MaxTextLength,
 		LocationMessage:      event.CapLevelDropped,
