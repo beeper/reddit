@@ -113,6 +113,18 @@ func (r *RedditClient) GetCapabilities(ctx context.Context, portal *bridgev2.Por
 		caps.State[event.StateRoomName.Type].Level = event.CapLevelRejected
 		caps.MemberActions[event.MemberActionInvite] = event.CapLevelRejected
 		caps.MemberActions[event.MemberActionKick] = event.CapLevelRejected
+	} else if meta, ok := portalMetadata(portal); ok && meta.State != nil && meta.State.Type == "reddit_titled_direct" {
+		caps.ID += ".titled"
+		caps.MemberActions[event.MemberActionInvite] = event.CapLevelRejected
+		caps.MemberActions[event.MemberActionKick] = event.CapLevelRejected
 	}
 	return caps
+}
+
+func portalMetadata(portal *bridgev2.Portal) (*PortalMetadata, bool) {
+	if portal == nil {
+		return nil, false
+	}
+	meta, ok := portal.Metadata.(*PortalMetadata)
+	return meta, ok && meta != nil
 }
