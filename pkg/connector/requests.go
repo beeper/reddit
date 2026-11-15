@@ -73,7 +73,7 @@ func (r *RedditClient) HandleMatrixDeleteChat(ctx context.Context, msg *bridgev2
 		return errors.New("chat ownership does not match Reddit room state")
 	}
 	switch state.Type {
-	case "direct":
+	case "direct", "reddit_titled_direct":
 		return wrapRedditError(r.matrix().SetRoomAccountData(ctx, roomID, "com.reddit.hidden_chat", map[string]bool{"hidden": true}))
 	case "private_group":
 		_, err = r.matrix().LeaveRoom(ctx, roomID)
