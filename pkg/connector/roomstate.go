@@ -41,7 +41,11 @@ var (
 )
 
 func isSupportedChatType(chatType string) bool {
-	return chatType == "direct" || chatType == "private_group"
+	return chatType == "direct" || chatType == "private_group" || chatType == "reddit_titled_direct"
+}
+
+func isOneToOneChatType(chatType string) bool {
+	return chatType == "direct" || chatType == "reddit_titled_direct"
 }
 
 func mergeRoomState(previous *RoomState, joined *mautrix.SyncJoinedRoom) (*RoomState, error) {
@@ -189,7 +193,7 @@ func (r *RedditClient) roomState(ctx context.Context, roomID id.RoomID, joined *
 		r.rooms[roomID] = &RoomState{Type: next.Type}
 		return nil, networkid.PortalKey{}, unbridgeable(fmt.Errorf("%w %q", errUnsupportedChatType, next.Type))
 	}
-	key := r.makePortalKey(roomID, next.Type == "direct")
+	key := r.makePortalKey(roomID, isOneToOneChatType(next.Type))
 	if existing != nil && existing.PortalKey != key {
 		return nil, key, unbridgeable(errors.New("saved portal ownership does not match Reddit chat type"))
 	}
@@ -240,7 +244,7 @@ func (r *RedditClient) chatInfoFromState(state *RoomState) *bridgev2.ChatInfo {
 		// Invited DM and group accounts can read /messages and reaction
 		// relations without joining. Return the native preview through normal
 		// backfill; the request flag and remote membership remain pending.
-		info.CanBackfill = !request || state.Type == "direct" || state.Type == "private_group"
+		info.CanBackfill = !request || isSupportedChatType(state.Type)
 	}
 	if state.Type == "direct" {
 		info.Type = ptr.Ptr(database.RoomTypeDM)
