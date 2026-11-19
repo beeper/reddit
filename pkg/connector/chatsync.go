@@ -318,7 +318,7 @@ func (r *RedditClient) unhideChatsWithNewMessages(ctx context.Context, resp *red
 }
 
 func isMessageEvent(evt *event.Event) bool {
-	return evt != nil && evt.Type == event.EventMessage
+	return evt != nil && (evt.Type == event.EventMessage || evt.Type == event.EventSticker)
 }
 
 func isHiddenChatEvent(evt *event.Event) bool {
@@ -399,7 +399,7 @@ func (r *RedditClient) handleLeftRoom(ctx context.Context, roomID id.RoomID) err
 }
 
 func (r *RedditClient) handleTimelineEvent(ctx context.Context, portalKey networkid.PortalKey, evt *event.Event) error {
-	if evt.Type == event.EventMessage || evt.Type == event.EventReaction || evt.Type == event.EventRedaction {
+	if evt.Type == event.EventMessage || evt.Type == event.EventSticker || evt.Type == event.EventReaction || evt.Type == event.EventRedaction {
 		if evt.ID == "" || evt.Sender == "" || (evt.RoomID != "" && makePortalID(evt.RoomID) != portalKey.ID) {
 			return unbridgeable(errors.New("reddit timeline event has invalid room or event identity"))
 		}
@@ -408,7 +408,7 @@ func (r *RedditClient) handleTimelineEvent(ctx context.Context, portalKey networ
 		}
 	}
 	switch evt.Type {
-	case event.EventMessage:
+	case event.EventMessage, event.EventSticker:
 		return r.queueMessage(ctx, portalKey, evt)
 	case event.EventRedaction:
 		return r.queueRedaction(ctx, portalKey, evt)

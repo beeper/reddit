@@ -366,6 +366,24 @@ func (c *Client) DownloadMedia(ctx context.Context, uri id.ContentURI) (*http.Re
 	return resp, err
 }
 
+type Sticker struct {
+	Key string              `json:"key"`
+	URL id.ContentURIString `json:"url"`
+}
+
+// Stickers lists the picker catalog Reddit Chat web loads from its media server.
+func (c *Client) Stickers(ctx context.Context) ([]Sticker, error) {
+	var resp struct {
+		Stickers []Sticker `json:"stickers"`
+	}
+	_, err := c.Matrix.MakeFullRequest(ctx, mautrix.FullRequest{
+		Method:       http.MethodGet,
+		URL:          c.Matrix.BuildURL(mautrix.MediaURLPath{"custom", "stickers", ""}),
+		ResponseJSON: &resp,
+	})
+	return resp.Stickers, err
+}
+
 func (c *Client) DownloadMediaBytes(ctx context.Context, uri id.ContentURI) ([]byte, error) {
 	resp, err := c.DownloadMedia(ctx, uri)
 	if resp != nil && resp.Body != nil {

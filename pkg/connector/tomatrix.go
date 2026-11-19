@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/rs/zerolog"
 	"maunium.net/go/mautrix/bridgev2"
@@ -10,7 +11,7 @@ import (
 	"maunium.net/go/mautrix/event"
 )
 
-// convertMessage turns a Reddit-side m.room.message event into a bridgev2
+// convertMessage turns a Reddit-side m.room.message or m.sticker event into a bridgev2
 // ConvertedMessage. Event IDs belong to different servers: relation targets
 // must be resolved by bridgev2 rather than forwarding Reddit IDs to Beeper.
 func (r *RedditClient) convertMessage(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, src *event.Event) (*bridgev2.ConvertedMessage, error) {
@@ -28,7 +29,7 @@ func (r *RedditClient) convertMessage(ctx context.Context, portal *bridgev2.Port
 			ID: "", Type: event.EventMessage, Content: &event.MessageEventContent{}, DontBridge: true,
 		}}}, nil
 	}
-	if err := src.Content.ParseRaw(event.EventMessage); err != nil && !errors.Is(err, event.ErrContentAlreadyParsed) {
+	if err := src.Content.ParseRaw(src.Type); err != nil && !errors.Is(err, event.ErrContentAlreadyParsed) {
 		return nil, unbridgeable(err)
 	}
 	original, ok := src.Content.Parsed.(*event.MessageEventContent)
@@ -42,12 +43,19 @@ func (r *RedditClient) convertMessage(ctx context.Context, portal *bridgev2.Port
 	content.RemoveReplyFallback()
 	content.RelatesTo = nil
 	content.NewContent = nil
-	switch content.MsgType {
-	case event.MsgImage:
+	partType := event.EventMessage
+	switch {
+	case src.Type == event.EventSticker, content.MsgType == event.MsgImage:
 		if err := r.receiveMedia(ctx, portal, intent, &content); err != nil {
 			return nil, err
 		}
-	case event.MsgText, event.MsgNotice, event.MsgEmote:
+		if src.Type == event.EventSticker {
+			partType = event.EventSticker
+			if key, ok := strings.CutPrefix(string(original.URL), redditStickerPrefix); ok {
+				content.Info.BridgedSticker = &event.BridgedSticker{Network: "reddit", ID: key, PackURL: stickerPackURL}
+			}
+		}
+	case content.MsgType == event.MsgText, content.MsgType == event.MsgNotice, content.MsgType == event.MsgEmote:
 		if portal != nil {
 			r.convertMentions(portal, &content)
 		}
@@ -59,7 +67,7 @@ func (r *RedditClient) convertMessage(ctx context.Context, portal *bridgev2.Port
 		Parts: []*bridgev2.ConvertedMessagePart{
 			{
 				ID:      networkid.PartID(""),
-				Type:    event.EventMessage,
+				Type:    partType,
 				Content: &content,
 			},
 		},
