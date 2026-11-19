@@ -240,12 +240,13 @@ func (r *RedditClient) downloadStickerPack(ctx context.Context) (*bridgev2.Impor
 		mxc := r.main.Bridge.DB.KV.Get(ctx, cacheKey)
 		if mxc == "" {
 			data, err := r.downloadRedditMedia(ctx, sticker.URL, nil)
-			if err != nil {
-				return nil, err
+			var mime string
+			if err == nil {
+				mime, err = imageMIME(data)
 			}
-			mime, err := imageMIME(data)
 			if err != nil {
-				return nil, err
+				zerolog.Ctx(ctx).Warn().Err(err).Str("sticker", sticker.Key).Msg("Failed to download Reddit sticker, skipping")
+				continue
 			}
 			uri, file, err := r.main.Bridge.Bot.UploadMedia(ctx, "", data, sticker.Key, mime)
 			if err != nil {
@@ -259,6 +260,9 @@ func (r *RedditClient) downloadStickerPack(ctx context.Context) (*bridgev2.Impor
 		images[sticker.Key] = &event.ImagePackImage{URL: id.ContentURIString(mxc), Info: &event.FileInfo{
 			BridgedSticker: &event.BridgedSticker{Network: "reddit", ID: sticker.Key, PackURL: stickerPackURL},
 		}}
+	}
+	if len(images) == 0 {
+		return nil, errors.New("no Reddit stickers could be imported")
 	}
 	return &bridgev2.ImportedImagePack{Shortcode: "reddit-stickers", Content: &event.ImagePackEventContent{Images: images, Metadata: *redditStickerPack()}}, nil
 }
