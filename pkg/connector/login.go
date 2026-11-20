@@ -92,14 +92,16 @@ func (p *PasswordLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) 
 		UserInputParams: &bridgev2.LoginUserInputParams{
 			Fields: []bridgev2.LoginInputDataField{
 				{
-					Type: bridgev2.LoginInputFieldTypeUsername,
-					ID:   FieldUsername,
-					Name: "Username",
+					Type:           bridgev2.LoginInputFieldTypeUsername,
+					ID:             FieldUsername,
+					Name:           "Username",
+					AutofillDomain: "reddit.com",
 				},
 				{
-					Type: bridgev2.LoginInputFieldTypePassword,
-					ID:   FieldPassword,
-					Name: "Password",
+					Type:           bridgev2.LoginInputFieldTypePassword,
+					ID:             FieldPassword,
+					Name:           "Password",
+					AutofillDomain: "reddit.com",
 				},
 			},
 		},
@@ -225,10 +227,11 @@ func (p *PasswordLogin) buildOTPStep() *bridgev2.LoginStep {
 		UserInputParams: &bridgev2.LoginUserInputParams{
 			Fields: []bridgev2.LoginInputDataField{
 				{
-					Type:    bridgev2.LoginInputFieldType2FACode,
-					ID:      FieldOTPCode,
-					Name:    "Authenticator code",
-					Pattern: `^[0-9]{6}$`,
+					Type:           bridgev2.LoginInputFieldType2FACode,
+					ID:             FieldOTPCode,
+					Name:           "Authenticator code",
+					Pattern:        `^[0-9]{6}$`,
+					AutofillDomain: "reddit.com",
 				},
 			},
 		},
