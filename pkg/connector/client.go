@@ -199,7 +199,8 @@ func (r *RedditClient) refreshChatToken(ctx context.Context) error {
 	if creds.UserID != r.meta.Credentials.UserID || makeUserLoginID(id.UserID(creds.UserID)) != r.userLogin.ID {
 		return errRefreshAccountMismatch
 	}
-	if creds.DeviceID == "" {
+	deviceResolved := creds.DeviceID != ""
+	if !deviceResolved {
 		creds.DeviceID = r.meta.Credentials.DeviceID
 	}
 	newClient, err := redditchat.New(creds)
@@ -219,6 +220,12 @@ func (r *RedditClient) refreshChatToken(ctx context.Context) error {
 	r.clientMu.Lock()
 	r.rc = newClient
 	r.clientMu.Unlock()
+	zerolog.Ctx(ctx).Debug().
+		Bool("token_changed", creds.AccessToken != previousCreds.AccessToken).
+		Bool("device_resolved", deviceResolved).
+		Int64("expires", token.Expires).
+		Int64("previous_expires", previousExpiry).
+		Msg("Refreshed Reddit chat token")
 	return nil
 }
 

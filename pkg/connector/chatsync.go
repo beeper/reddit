@@ -102,6 +102,10 @@ func (r *RedditClient) runSync(ctx context.Context, done chan struct{}) {
 			}
 			// An expired chat token may still have a renewable Reddit session.
 			if isUnauthorized(err) {
+				log.Debug().Err(err).
+					Bool("after_refresh", refreshed).
+					Int("rejected_refreshes", rejectedRefreshes).
+					Msg("Reddit chat server rejected the chat token, refreshing")
 				refreshErr := r.refreshChatToken(ctx)
 				if refreshErr == nil && !refreshed {
 					refreshed = true
