@@ -1,0 +1,45 @@
+{
+	"namespace": "reddit",
+	"messages": [
+		{
+			"key": "reddit:login.field.otp_code.name",
+			"english": "Authenticator code"
+		},
+		{
+			"key": "reddit:login.field.password.name",
+			"english": "Password"
+		},
+		{
+			"key": "reddit:login.field.username.name",
+			"english": "Username"
+		},
+		{
+			"key": "reddit:login.flow.password.description",
+			"english": "Log in with your Reddit account. Verification runs in the background."
+		},
+		{
+			"key": "reddit:login.flow.password.name",
+			"english": "Username \u0026 password"
+		},
+		{
+			"key": "reddit:login.step.captcha.instructions",
+			"english": "Verifying with Reddit…"
+		},
+		{
+			"key": "reddit:login.step.complete.instructions",
+			"english": "Logged in as {username}",
+			"params": [
+				"username"
+			],
+			"comment": "username is the Reddit username of the logged-in account"
+		},
+		{
+			"key": "reddit:login.step.credentials.instructions",
+			"english": "Enter your Reddit username and password."
+		},
+		{
+			"key": "reddit:login.step.otp.instructions",
+			"english": "Enter the 6-digit code from your authenticator app."
+		}
+	]
+}
