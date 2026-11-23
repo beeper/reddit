@@ -10,6 +10,7 @@ import (
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/id"
 )
 
 var (
@@ -40,16 +41,28 @@ func (r *RedditClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Ma
 		copyMediaInfo(content)
 		content.Info.MauGIF = false
 	}
+	evtType := event.EventMessage
 	switch content.MsgType {
+	case event.CapMsgSticker:
+		if content.Info != nil && content.Info.BridgedSticker != nil && content.Info.BridgedSticker.Network == "reddit" && content.Info.BridgedSticker.PackURL == stickerPackURL {
+			key := content.Info.BridgedSticker.ID
+			evtType, content.MsgType, content.Body = event.EventSticker, "", key
+			content.URL, content.File = id.ContentURIString(redditStickerPrefix+key), nil
+			content.Info = &event.FileInfo{Width: 128, Height: 128}
+			break
+		}
+		content.MsgType = event.MsgImage
+		fallthrough
 	case event.MsgImage:
 		if err = r.sendMedia(ctx, content); err != nil {
 			return nil, mediaSendStatus(err)
 		}
+		content.Info.BridgedSticker = nil
 	case event.MsgText, event.MsgNotice, event.MsgEmote:
 	default:
 		return nil, bridgev2.ErrUnsupportedMessageType
 	}
-	resp, err := r.remote().SendMessage(ctx, portalIDToRoomID(msg.Portal.ID), content, mautrix.ReqSendEvent{TransactionID: txn})
+	resp, err := r.matrix().SendMessageEvent(ctx, portalIDToRoomID(msg.Portal.ID), evtType, content, mautrix.ReqSendEvent{TransactionID: txn})
 	if err != nil {
 		return nil, wrapRedditError(err)
 	}

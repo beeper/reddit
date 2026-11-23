@@ -105,13 +105,13 @@ func (r *RedditClient) FetchMessages(ctx context.Context, params bridgev2.FetchM
 			// FetchMessages returns messages and their current reactions. Live
 			// removals use remote events; history must not send Matrix events or
 			// mutate bridgev2's mappings as a side effect of fetching a page.
-			if evt.Type != event.EventMessage {
+			if evt.Type != event.EventMessage && evt.Type != event.EventSticker {
 				continue
 			}
 			if evt.ID == "" || evt.Sender == "" {
 				return nil, errors.New("reddit history event has no stable identity")
 			}
-			if err = evt.Content.ParseRaw(event.EventMessage); err != nil && !errors.Is(err, event.ErrContentAlreadyParsed) {
+			if err = evt.Content.ParseRaw(evt.Type); err != nil && !errors.Is(err, event.ErrContentAlreadyParsed) {
 				result.Messages = append(result.Messages, r.historyPlaceholder(ctx, evt, err))
 				continue
 			}
@@ -122,7 +122,7 @@ func (r *RedditClient) FetchMessages(ctx context.Context, params bridgev2.FetchM
 				return nil, errors.New("reddit thread history contains a reply to another root")
 			}
 			var intent bridgev2.MatrixAPI
-			if evt.Unsigned.RedactedBecause == nil && evt.Content.AsMessage().MsgType == event.MsgImage {
+			if evt.Unsigned.RedactedBecause == nil && (evt.Type == event.EventSticker || evt.Content.AsMessage().MsgType == event.MsgImage) {
 				intent, _ = params.Portal.GetIntentFor(ctx, r.makeSender(evt.Sender), r.userLogin, bridgev2.RemoteEventMessage)
 			}
 			converted, err := r.convertMessage(ctx, params.Portal, intent, evt)
