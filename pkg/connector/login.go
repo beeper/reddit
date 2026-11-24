@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 
+	"go.mau.fi/util/l10n"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
@@ -36,8 +37,8 @@ const (
 func (rc *RedditConnector) GetLoginFlows() []bridgev2.LoginFlow {
 	return []bridgev2.LoginFlow{
 		{
-			Name:        "Username & password",
-			Description: "Log in with your Reddit account. Verification runs in the background.",
+			Name:        msgFlowPasswordName.Message(),
+			Description: msgFlowPasswordDescription.Message(),
 			ID:          FlowIDPassword,
 		},
 	}
@@ -88,19 +89,19 @@ func (p *PasswordLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) 
 	return &bridgev2.LoginStep{
 		Type:         bridgev2.LoginStepTypeUserInput,
 		StepID:       StepIDEnterCredentials,
-		Instructions: "Enter your Reddit username and password.",
+		Instructions: msgStepCredentialsInstructions.Message(),
 		UserInputParams: &bridgev2.LoginUserInputParams{
 			Fields: []bridgev2.LoginInputDataField{
 				{
 					Type:           bridgev2.LoginInputFieldTypeUsername,
 					ID:             FieldUsername,
-					Name:           "Username",
+					Name:           msgFieldUsernameName.Message(),
 					AutofillDomain: "reddit.com",
 				},
 				{
 					Type:           bridgev2.LoginInputFieldTypePassword,
 					ID:             FieldPassword,
-					Name:           "Password",
+					Name:           msgFieldPasswordName.Message(),
 					AutofillDomain: "reddit.com",
 				},
 			},
@@ -185,7 +186,7 @@ func (p *PasswordLogin) buildCaptchaStep(req redditchat.CaptchaRequest) *bridgev
 	return &bridgev2.LoginStep{
 		Type:         bridgev2.LoginStepTypeCookies,
 		StepID:       stepID,
-		Instructions: "Verifying with Reddit…",
+		Instructions: msgStepCaptchaInstructions.Message(),
 		CookiesParams: &bridgev2.LoginCookiesParams{
 			URL:       req.PageURL,
 			UserAgent: redditchat.DefaultRedditUserAgent,
@@ -223,13 +224,13 @@ func (p *PasswordLogin) buildOTPStep() *bridgev2.LoginStep {
 	return &bridgev2.LoginStep{
 		Type:         bridgev2.LoginStepTypeUserInput,
 		StepID:       StepIDEnterOTP,
-		Instructions: "Enter the 6-digit code from your authenticator app.",
+		Instructions: msgStepOTPInstructions.Message(),
 		UserInputParams: &bridgev2.LoginUserInputParams{
 			Fields: []bridgev2.LoginInputDataField{
 				{
 					Type:           bridgev2.LoginInputFieldType2FACode,
 					ID:             FieldOTPCode,
-					Name:           "Authenticator code",
+					Name:           msgFieldOTPName.Message(),
 					Pattern:        `^[0-9]{6}$`,
 					AutofillDomain: "reddit.com",
 				},
@@ -278,7 +279,7 @@ func (p *PasswordLogin) completeStep(ctx context.Context) (*bridgev2.LoginStep, 
 	return &bridgev2.LoginStep{
 		Type:           bridgev2.LoginStepTypeComplete,
 		StepID:         StepIDComplete,
-		Instructions:   fmt.Sprintf("Logged in as %s", remoteName),
+		Instructions:   msgStepCompleteInstructions.Render(l10n.Params{"username": remoteName}),
 		CompleteParams: &bridgev2.LoginCompleteParams{UserLoginID: ul.ID, UserLogin: ul},
 	}, nil
 }
